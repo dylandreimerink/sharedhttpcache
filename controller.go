@@ -1,4 +1,4 @@
-package caching
+package sharedhttpcache
 
 import (
 	"bufio"
@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dylandreimerink/sharedhttpcache/layer"
@@ -126,6 +127,8 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 			cachedResponse.Request = req
 
 			//If response is fresh and we don't have to revalidate because of a no-cache directive
+			//TODO test against the allowed age and freshness specified in section 5.2.1.1, 5.2.1.2 and 5.2.1.3 of RFC7234
+			//TODO check if response must be revalidated (must-revalidate and proxy-revalidate)
 			if ttl > 0 && !RequestOrResponseHasNoCache(cachedResponse) {
 
 				err = WriteCachedResponse(resp, cachedResponse, ttl)
@@ -175,8 +178,12 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 
 							log.Warning("Unable to revalidate cache at origin server")
 
-							http.Error(resp, "Unable to reach origin server while revalidating cache", http.StatusBadGateway)
+							//Send a 504 since we can't revalidate and we are not allowed to serve the content stale
+							//504 is used since it is mentioned in section 5.2.2.1 of RFC7234
+							http.Error(resp, "Unable to reach origin server while revalidating cache", http.StatusGatewayTimeout)
 						} else {
+							//If we reached this block it means we were able to contact the origin but it returned a 5xx code and are not allowed to serve a stale response
+							//So we have to send the error to the client as per section 4.3.3 of RFC7234
 							WriteHTTPResponse(resp, validationResponse)
 						}
 					}
@@ -306,8 +313,35 @@ func (controller *CacheController) StoreResponseInCache(cacheKey string, respons
 	return nil
 }
 
+//MayServeStaleResponse checks if according to the config and rules specified in RFC7234 the caching server is allowed to serve the response if it is stale
 func MayServeStaleResponse(cacheConfig *CacheConfig, response *http.Response) bool {
-	//TODO check if allowed to serve stale response
+
+	//If serving of stale responses is turned off
+	if !cacheConfig.ServeStateOnError {
+		return false
+	}
+
+	if MayServeStaleResponseByExtension(cacheConfig, response) {
+		return true
+	}
+
+	directives := SplitCacheControlHeader(response.Header.Get("Cache-Control"))
+	for _, directive := range directives {
+
+		//If response contains a cache directive that disallowes stale responses section 4.2.4 of RFC7234
+		if directive == "must-revalidate" || directive == "proxy-revalidate" ||
+			directive == "no-cache" || strings.HasPrefix(directive, "s-maxage") {
+
+			return false
+		}
+	}
+
+	return true
+}
+
+func MayServeStaleResponseByExtension(cacheConfig *CacheConfig, response *http.Response) bool {
+
+	//TODO implement https://tools.ietf.org/html/rfc5861
 
 	return false
 }
@@ -505,39 +539,4 @@ func GetEffectiveURI(req *http.Request, forwardConfig *ForwardConfig) string {
 	}
 
 	return effectiveURI.String()
-}
-
-//A CacheConfigResolver resolves which cache config to use for which request.
-// Different websites or even different pages on the same site can have different cache settings
-type CacheConfigResolver interface {
-
-	//GetCacheConfig is called to resolve a CacheConfig depending on the request
-	// If nil is returned the default config will be used
-	GetCacheConfig(req *http.Request) *CacheConfig
-}
-
-//A TransportResolver resolves which transport should be used for a particulair request
-type TransportResolver interface {
-
-	//GetTransport is called to resolve a CacheConfig depending on the request
-	// If nil is returned the default transport will be used
-	GetTransport(req *http.Request) http.RoundTripper
-}
-
-//The ForwardConfig holds information about how to forward traffic to the origin server
-type ForwardConfig struct {
-	//Can be a Hostname or a IP address and optionally the tcp port
-	// if no port is specified the default http or https port is used based on the TLS variable
-	Host string
-
-	//If a https (http over TLS) connection should be used
-	TLS bool
-}
-
-//A ForwardConfigResolver resolves which forward config should be used for a particulair request
-type ForwardConfigResolver interface {
-
-	//GetForwardConfig is called to resolve a ForwardConfig depending on the request
-	// If nil is returned the default forwardConfig will be used
-	GetForwardConfig(req *http.Request) *ForwardConfig
 }

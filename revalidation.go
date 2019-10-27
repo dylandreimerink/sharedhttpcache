@@ -1,4 +1,4 @@
-package caching
+package sharedhttpcache
 
 import (
 	"context"

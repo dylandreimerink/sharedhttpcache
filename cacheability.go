@@ -1,4 +1,4 @@
-package caching
+package sharedhttpcache
 
 import (
 	"net/http"
@@ -30,10 +30,7 @@ func ShouldStoreResponse(config *CacheConfig, resp *http.Response) bool {
 		return false
 	}
 
-	requestCacheControlDirectives := []string{}
-	for _, directive := range strings.Split(strings.ToLower(req.Header.Get("Cache-Control")), ",") {
-		requestCacheControlDirectives = append(requestCacheControlDirectives, strings.TrimSpace(directive))
-	}
+	requestCacheControlDirectives := SplitCacheControlHeader(req.Header.Get("Cache-Control"))
 
 	//if the request contains the cache-control header and it contains no-store the response should not be cached
 	for _, directive := range requestCacheControlDirectives {
@@ -42,10 +39,7 @@ func ShouldStoreResponse(config *CacheConfig, resp *http.Response) bool {
 		}
 	}
 
-	responseCacheControlDirectives := []string{}
-	for _, directive := range strings.Split(strings.ToLower(resp.Header.Get("Cache-Control")), ",") {
-		responseCacheControlDirectives = append(responseCacheControlDirectives, strings.TrimSpace(directive))
-	}
+	responseCacheControlDirectives := SplitCacheControlHeader(resp.Header.Get("Cache-Control"))
 
 	for _, directive := range responseCacheControlDirectives {
 		//if the response contains the cache-control header and it contains no-store the response should not be cached
@@ -135,10 +129,7 @@ func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 
 	//The header value is comma seperated, so split it on the comma.
 	// Lowercase the directive so string comparason is easier and trim the spaces from the directives
-	directives := []string{}
-	for _, directive := range strings.Split(strings.ToLower(resp.Header.Get("Cache-Control")), ",") {
-		directives = append(directives, strings.TrimSpace(directive))
-	}
+	directives := SplitCacheControlHeader(resp.Header.Get("Cache-Control"))
 
 	//s-maxage has priority because this is a shared cache
 	for _, directive := range directives {
@@ -203,13 +194,13 @@ func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 
 func RequestOrResponseHasNoCache(resp *http.Response) bool {
 
-	for _, directive := range strings.Split(strings.ToLower(resp.Header.Get("Cache-Control")), ",") {
+	for _, directive := range SplitCacheControlHeader(resp.Header.Get("Cache-Control")) {
 		if strings.TrimSpace(directive) == "no-cache" {
 			return true
 		}
 	}
 
-	for _, directive := range strings.Split(strings.ToLower(resp.Request.Header.Get("Cache-Control")), ",") {
+	for _, directive := range SplitCacheControlHeader(resp.Request.Header.Get("Cache-Control")) {
 		if strings.TrimSpace(directive) == "no-cache" {
 			return true
 		}

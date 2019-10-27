@@ -1,4 +1,4 @@
-package caching
+package sharedhttpcache
 
 import (
 	"net/http"
@@ -49,8 +49,9 @@ type CacheConfig struct {
 	// Note that this carries a performace impact because at every time a new incomplete range is received reconstruction of the full resource will be attempted
 	CombinePartialResponses bool
 
-	//If ShowCacheOnError is true the cache will show a stale response in case revalidation fails because the origin server returned a 5xx code or is unreachable
-	ShowCacheOnError bool
+	//If ServeStateOnError is true the cache will attempt to serve a stale response in case revalidation fails because the origin server returned a 5xx code or is unreachable
+	//This setting respects the Cache-Control header of the client and server.
+	ServeStateOnError bool
 
 	//If HTTPWarnings is true warnings as described in section 5.5 of RFC7234 will be added to HTTP responses
 	// This is a option because the feature will be removed from future HTTP specs https://github.com/httpwg/http-core/issues/139
@@ -64,8 +65,12 @@ func NewCacheConfig() *CacheConfig {
 
 		SafeMethods: []string{http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace}, //section 4.2.1 of RFC7231
 
-		CacheIncompleteResponses: false, //Disable this feature by default because it impacts performace
+		CacheIncompleteResponses: false, //Disable this feature by default because it impacts performance
 		CombinePartialResponses:  false, //Disable this feature by default because it impacts performance
+
+		ServeStateOnError: true, //No reason not to do it by default
+
+		HTTPWarnings: true, //Be RFC compliant by default
 
 		CacheableFileExtensions: []string{ //Default used by CloudFlare
 			"bmp", "ejs", "jpeg", "pdf", "ps", "ttf",
@@ -87,4 +92,39 @@ func NewCacheConfig() *CacheConfig {
 			410: 3 * time.Minute,
 		},
 	}
+}
+
+//A CacheConfigResolver resolves which cache config to use for which request.
+// Different websites or even different pages on the same site can have different cache settings
+type CacheConfigResolver interface {
+
+	//GetCacheConfig is called to resolve a CacheConfig depending on the request
+	// If nil is returned the default config will be used
+	GetCacheConfig(req *http.Request) *CacheConfig
+}
+
+//A TransportResolver resolves which transport should be used for a particulair request
+type TransportResolver interface {
+
+	//GetTransport is called to resolve a CacheConfig depending on the request
+	// If nil is returned the default transport will be used
+	GetTransport(req *http.Request) http.RoundTripper
+}
+
+//The ForwardConfig holds information about how to forward traffic to the origin server
+type ForwardConfig struct {
+	//Can be a Hostname or a IP address and optionally the tcp port
+	// if no port is specified the default http or https port is used based on the TLS variable
+	Host string
+
+	//If a https (http over TLS) connection should be used
+	TLS bool
+}
+
+//A ForwardConfigResolver resolves which forward config should be used for a particulair request
+type ForwardConfigResolver interface {
+
+	//GetForwardConfig is called to resolve a ForwardConfig depending on the request
+	// If nil is returned the default forwardConfig will be used
+	GetForwardConfig(req *http.Request) *ForwardConfig
 }
