@@ -77,6 +77,12 @@ func ShouldStoreResponse(config *CacheConfig, resp *http.Response) bool {
 		}
 	}
 
+	//If the Vary header is a asterisk any variation in the request has a different response
+	//Thus it makes the response not cacheable
+	if resp.Header.Get("Vary") == "*" {
+		return false
+	}
+
 	//if the expires header is set (see Section 5.3 of RFC7234)
 	if resp.Header.Get("Expires") != "" {
 

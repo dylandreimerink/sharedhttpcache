@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"io/ioutil"
 	"net/http"
+	"net/textproto"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -102,13 +105,23 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 
 	var response *http.Response
 
-	cacheKey := GetCacheKey(cacheConfig, forwardConfig, req)
+	primaryCacheKey := GetPrimaryCacheKey(cacheConfig, forwardConfig, req)
 
 	//Optimization: only if the method is safe and cacheable will it be in the cache
 	// if if one of the two is false we can save the cache loopup and just forward the request
 	if IsMethodSafe(cacheConfig, req.Method) && IsMethodCacheable(cacheConfig, req.Method) {
 
-		cachedResponse, ttl, err := controller.FindInCache(cacheKey)
+		secondaryKeys, _, err := controller.FindSecondaryKeysInCache(primaryCacheKey)
+		if err != nil {
+			controller.Logger.WithError(err).WithField("cache-key", primaryCacheKey).Error("Error while attempting to find secondary cache key in cache")
+		}
+
+		secondaryCacheKey := GetSecondaryCacheKey(secondaryKeys, req)
+
+		//The full cacheKey is the primary cache key plus the secondary cache key
+		cacheKey := primaryCacheKey + secondaryCacheKey
+
+		cachedResponse, ttl, err := controller.FindResponseInCache(cacheKey)
 		if err != nil {
 			//TODO make erroring optional, if the cache fails we may just want to forward the request instead of erroring
 
@@ -257,6 +270,36 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 		//Get ttl and check if the response is not considered stale on arrival
 		if ttl := GetResponseTTL(cacheConfig, response); ttl > 0 {
 
+			//Get the secondary key fields from the response (if any exist)
+			secondaryKeyFields := []string{}
+			vary := response.Header.Get("Vary")
+			if vary != "" {
+				for _, key := range strings.Split(vary, ",") {
+					secondaryKeyFields = append(secondaryKeyFields, strings.TrimSpace(key))
+				}
+			}
+
+			//Get the secondaryCacheKey
+			secondaryCacheKey := GetSecondaryCacheKey(secondaryKeyFields, req)
+
+			//Append the two to get the full cache key
+			cacheKey := primaryCacheKey + secondaryCacheKey
+
+			//Store the latest set of secondary keys we find
+			//this can cause issues if the origin returns a different value in Vary for different primary cache keys
+			//TODO look into this
+			err := controller.StoreSecondaryKeysInCache(primaryCacheKey, secondaryKeyFields, ttl)
+			if err != nil {
+
+				controller.Logger.WithError(err).WithFields(logrus.Fields{
+					"cache-key": cacheKey,
+					"response":  response,
+				}).Error("Error while attempting to store secondary cache keys in cache")
+
+				//TODO handle gracefully so the requests can continue even if we can't store the response
+				panic(err)
+			}
+
 			err = controller.StoreResponseInCache(cacheKey, response, ttl)
 			if err != nil {
 				controller.Logger.WithError(err).WithFields(logrus.Fields{
@@ -268,7 +311,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 				panic(err)
 			}
 
-			response, _, err = controller.FindInCache(cacheKey)
+			response, _, err = controller.FindResponseInCache(cacheKey)
 			if err != nil {
 				panic(err)
 			}
@@ -311,6 +354,20 @@ func (controller *CacheController) StoreResponseInCache(cacheKey string, respons
 	}
 
 	return nil
+}
+
+//StoreSecondaryKeysInCache
+func (controller *CacheController) StoreSecondaryKeysInCache(primaryCacheKey string, keys []string, ttl time.Duration) error {
+
+	secondaryCacheKeys := "secondary-keys" + primaryCacheKey
+
+	sort.Strings(keys)
+
+	keysString := strings.Join(keys, "\n")
+
+	keysReader := ioutil.NopCloser(strings.NewReader(keysString))
+
+	return controller.StoreInCache(secondaryCacheKeys, keysReader, ttl)
 }
 
 //MayServeStaleResponse checks if according to the config and rules specified in RFC7234 the caching server is allowed to serve the response if it is stale
@@ -450,9 +507,9 @@ func (controller *CacheController) StoreInCache(cacheKey string, entry io.ReadCl
 	return nil
 }
 
-//FindInCache attempts to find a cached response in the caching layers
+//FindResponseInCache attempts to find a cached response in the caching layers
 // it returns the cached response and the TTL. A negative TTL means the response is stale
-func (controller *CacheController) FindInCache(cacheKey string) (*http.Response, time.Duration, error) {
+func (controller *CacheController) FindResponseInCache(cacheKey string) (*http.Response, time.Duration, error) {
 
 	//TODO if a entry is found in a lower layer consider moving it to a higher layer if it is requested more frequently
 
@@ -484,18 +541,89 @@ func (controller *CacheController) FindInCache(cacheKey string) (*http.Response,
 	return nil, -1, nil
 }
 
-//GetCacheKey generates a cache key for the request according to the requirement in section 4 of RFC7234
-// The acception being the secondary keys, they are not supported as of this moment.
-func GetCacheKey(cacheConfig *CacheConfig, forwardConfig *ForwardConfig, req *http.Request) string {
+//FindSecondaryKeyIndexInCache attempts to find the secondary keys defined for a set of responses with the given primary cache key
+//It does this by prepending "secondary-keys" to the cache key and splitting the result on newlines
+//
+//If no secondary keys exist or can't be found in the cache a slice of zero length will be returned
+//The ttl will be -1 of no entry was found
+func (controller *CacheController) FindSecondaryKeysInCache(cacheKey string) ([]string, time.Duration, error) {
+
+	//TODO if a entry is found in a lower layer consider moving it to a higher layer if it is requested more frequently
+
+	secondaryCacheKey := "secondary-keys" + cacheKey
+
+	for _, cacheLayer := range controller.Layers {
+		reader, ttl, err := cacheLayer.Get(secondaryCacheKey)
+		if err != nil {
+			return []string{}, -1, err
+		}
+
+		//If the entry was not found
+		if reader == nil {
+			continue
+		}
+
+		keyReader := bufio.NewReader(reader)
+
+		//Close the cache reader when we are done
+		defer reader.Close()
+
+		keys := []string{}
+
+		scanner := bufio.NewScanner(keyReader)
+		for scanner.Scan() {
+			keys = append(keys, scanner.Text())
+		}
+
+		return keys, ttl, scanner.Err()
+	}
+
+	//If entry wasn't found in any layer
+	return []string{}, -1, nil
+}
+
+//GetPrimaryCacheKey generates the primary cache key for the request according to the requirement in section 4 of RFC7234
+//The primary keys is the method, host and effective URI concatinated together
+func GetPrimaryCacheKey(cacheConfig *CacheConfig, forwardConfig *ForwardConfig, req *http.Request) string {
 
 	//TODO custom cache keys
-
-	//TODO support secondary keys
 
 	buf := &bytes.Buffer{}
 
 	buf.WriteString(req.Method)
 	buf.WriteString(GetEffectiveURI(req, forwardConfig))
+
+	return buf.String()
+}
+
+//GetSecondaryCacheKey generates the secondary cache key based on the secondary key fields specified in the cached responses and the current request
+func GetSecondaryCacheKey(secondaryKeyFields []string, req *http.Request) string {
+
+	//Sort the fields so the order in the resulting key is always the same
+	sort.Strings(secondaryKeyFields)
+
+	buf := &bytes.Buffer{}
+
+	for _, key := range secondaryKeyFields {
+		//Separate pieces of the key by the pipe. It is not a allowed value in the Method, hostname, URI or header names so it is a good seperator
+		buf.WriteRune('|')
+
+		//Write the key as part of the cache key
+		buf.WriteString(key)
+
+		//Separate field name from value
+		buf.WriteRune(':')
+
+		values := req.Header[textproto.CanonicalMIMEHeaderKey(key)]
+		sort.Strings(values)
+
+		for _, value := range values {
+
+			//TODO normalize value based on per header syntax as per Section 4.1 of RFC7234
+
+			buf.WriteString(value)
+		}
+	}
 
 	return buf.String()
 }
