@@ -119,6 +119,19 @@ func ShouldStoreResponse(config *CacheConfig, resp *http.Response) bool {
 		}
 	}
 
+	//Loop over every file extension to check if it is cacheable by default
+	//TODO This comparason may be faster with a string search algorithm like Aho–Corasick
+	defaultCacheableExtension := false
+	for _, extentsion := range config.CacheableFileExtensions {
+		if strings.HasSuffix(req.URL.Path, "."+extentsion) {
+			defaultCacheableExtension = true
+		}
+	}
+
+	if !defaultCacheableExtension {
+		return false
+	}
+
 	//if the response has a status code that is defined as cacheable by default (see
 	//  Section 4.2.2)
 	if _, found := config.StatusCodeDefaultExpirationTimes[resp.StatusCode]; found {
