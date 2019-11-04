@@ -10,13 +10,18 @@ The goal of this project is to make a RFC 7234 compliant shared caching server i
 - Multi layer system
 - Customizable logging
 
+## Usage
+
+TODO make command line usage section for the standalone cache server
+
 ## Examples
 
-TODO make some usage examples
+For library examples please go the the [godoc page](https://godoc.org/github.com/dylandreimerink/sharedhttpcache)
 
 ## TODO
 
 - Make fully RFC7234 compliant
+- Add standalone cache server command for use as executable
 - Adding tests, both unit and integration
 - Add project to CI pipeline with code standards
 - Store partial responses
@@ -24,7 +29,8 @@ TODO make some usage examples
 - Calculating Heuristic Freshness based on past behavior
 - Refactor code to improve readability
 - Add informational headers about cache hit's ect.
-- Add HTTP/2 support
+- Add HTTP/2 push support
+- http cache-aware server-push [link](https://github.com/h2o/h2o/issues/421)
 - Add Cache-Control extensions (Or at least make a callback so someone can from outside the package)
   - [RFC5861 - HTTP Cache-Control Extensions for Stale Content](https://tools.ietf.org/html/rfc5861)
   - [RFC8246 - HTTP Immutable Responses](https://tools.ietf.org/html/rfc8246)

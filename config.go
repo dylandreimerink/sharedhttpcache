@@ -128,3 +128,11 @@ type ForwardConfigResolver interface {
 	// If nil is returned the default forwardConfig will be used
 	GetForwardConfig(req *http.Request) *ForwardConfig
 }
+
+//The ForwardConfigResolverFunc type is an adapter to allow the use of ordinary functions as ForwardConfigResolver
+type ForwardConfigResolverFunc func(req *http.Request) *ForwardConfig
+
+//GetForwardConfig calls the underlying function to resolve a forward config from a request
+func (resolver ForwardConfigResolverFunc) GetForwardConfig(req *http.Request) *ForwardConfig {
+	return resolver(req)
+}
