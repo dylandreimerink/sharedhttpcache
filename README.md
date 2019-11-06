@@ -1,6 +1,7 @@
 # HTTP caching
 
 [![GoDoc](https://godoc.org/github.com/dylandreimerink/sharedhttpcache?status.svg)](https://godoc.org/github.com/dylandreimerink/sharedhttpcache)
+[![Travis CI](https://api.travis-ci.com/dylandreimerink/sharedhttpcache.svg?branch=master)](https://travis-ci.com/dylandreimerink/sharedhttpcache)
 
 The goal of this project is to make a RFC 7234 compliant shared caching server in Go. Tho the main goal is to have a out-of-the-box working caching server it is also important that the functionality is exported so it can be used as library in bigger projects.
 
