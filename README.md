@@ -4,6 +4,7 @@
 [![Travis CI](https://api.travis-ci.com/dylandreimerink/sharedhttpcache.svg?branch=master)](https://travis-ci.com/dylandreimerink/sharedhttpcache)
 [![Codecov](https://codecov.io/gh/dylandreimerink/sharedhttpcache/branch/master/graph/badge.svg)](https://codecov.io/gh/dylandreimerink/sharedhttpcache)
 [![GoReport](https://goreportcard.com/badge/github.com/dylandreimerink/sharedhttpcache)](https://goreportcard.com/report/github.com/dylandreimerink/sharedhttpcache)
+[![GolangCI](https://golangci.com/badges/github.com/golangci/golangci-lint.svg)](https://golangci.com/r/github.com/dylandreimerink/sharedhttpcache)
 
 The goal of this project is to make a RFC 7234 compliant shared caching server in Go. Tho the main goal is to have a out-of-the-box working caching server it is also important that the functionality is exported so it can be used as library in bigger projects.
 
@@ -26,7 +27,6 @@ For library examples please go the the [godoc page](https://godoc.org/github.com
 - Make fully RFC7234 compliant
 - Add standalone cache server command for use as executable
 - Adding tests, both unit and integration
-- Add project to CI pipeline with code standards
 - Store partial responses
 - Combining Partial Content
 - Calculating Heuristic Freshness based on past behavior

@@ -262,8 +262,8 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 	}
 
 	//If the response has no date the proxy must set it as per section 7.1.1.2 of RFC7231
-	if response.Header.Get("Date") == "" {
-		response.Header.Set("Date", time.Now().Format(http.TimeFormat))
+	if response.Header.Get(DateHeader) == "" {
+		response.Header.Set(DateHeader, time.Now().Format(http.TimeFormat))
 	}
 
 	//TODO invalidate cache entries, unsafe methods can invalidate other cache entries
@@ -278,7 +278,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 
 			//Get the secondary key fields from the response (if any exist)
 			secondaryKeyFields := []string{}
-			vary := response.Header.Get("Vary")
+			vary := response.Header.Get(VaryHeader)
 			if vary != "" {
 				for _, key := range strings.Split(vary, ",") {
 					secondaryKeyFields = append(secondaryKeyFields, strings.TrimSpace(key))
@@ -388,12 +388,12 @@ func MayServeStaleResponse(cacheConfig *CacheConfig, response *http.Response) bo
 		return true
 	}
 
-	directives := SplitCacheControlHeader(response.Header.Get("Cache-Control"))
+	directives := SplitCacheControlHeader(response.Header.Get(CacheControlHeader))
 	for _, directive := range directives {
 
 		//If response contains a cache directive that disallowes stale responses section 4.2.4 of RFC7234
-		if directive == "must-revalidate" || directive == "proxy-revalidate" ||
-			directive == "no-cache" || strings.HasPrefix(directive, "s-maxage") {
+		if directive == MustRevalidateDirective || directive == ProxyRevalidateDirective ||
+			directive == NoCacheDirective || strings.HasPrefix(directive, SMaxAgeDirective) {
 
 			return false
 		}
@@ -448,7 +448,7 @@ func WriteCachedResponse(rw http.ResponseWriter, cachedResponse *http.Response, 
 
 	age := -1
 
-	dateString := cachedResponse.Header.Get("Date")
+	dateString := cachedResponse.Header.Get(DateHeader)
 	if dateString != "" {
 		date, err := http.ParseTime(dateString)
 		if err == nil {
@@ -589,7 +589,7 @@ func (controller *CacheController) FindSecondaryKeysInCache(cacheKey string) ([]
 }
 
 //GetPrimaryCacheKey generates the primary cache key for the request according to the requirement in section 4 of RFC7234
-//The primary keys is the method, host and effective URI concatinated together
+//The primary keys is the method, host and effective URI concatenated together
 func GetPrimaryCacheKey(cacheConfig *CacheConfig, forwardConfig *ForwardConfig, req *http.Request) string {
 
 	//TODO custom cache keys
@@ -611,7 +611,7 @@ func GetSecondaryCacheKey(secondaryKeyFields []string, req *http.Request) string
 	buf := &bytes.Buffer{}
 
 	for _, key := range secondaryKeyFields {
-		//Separate pieces of the key by the pipe. It is not a allowed value in the Method, hostname, URI or header names so it is a good seperator
+		//Separate pieces of the key by the pipe. It is not a allowed value in the Method, hostname, URI or header names so it is a good separator
 		buf.WriteRune('|')
 
 		//Write the key as part of the cache key

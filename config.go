@@ -10,7 +10,7 @@ import (
 type CacheConfig struct {
 
 	//CacheableMethods is a list of request methods for which responses may be cached.
-	// It is not advisable to cache unsafe methods like POST. Tho it is possable to do so
+	// It is not advisable to cache unsafe methods like POST. Tho it is possible to do so
 	// Note that unsafe methods will not be cached even if they are in this list as per section 4 of RFC7234
 	//
 	// WARNING values must be uppercase, no case conversion is done at runtime
@@ -32,7 +32,7 @@ type CacheConfig struct {
 	StatusCodeDefaultExpirationTimes map[int]time.Duration
 
 	//CacheableFileExtensions is a list of cacheable file extensions
-	// File extentions are used instead of MIME types because the same file extension can have separate MIME types
+	// File extensions are used instead of MIME types because the same file extension can have separate MIME types
 	// It is advised to only use static file types like stylesheets or images and not dynamic content like html
 	CacheableFileExtensions []string
 
@@ -46,7 +46,7 @@ type CacheConfig struct {
 	// When this feature is enabled and incomplete responses are enabled
 	// the caching server attempts to combine multiple incomplete responses into a complete response.
 	//
-	// Note that this carries a performace impact because at every time a new incomplete range is received reconstruction of the full resource will be attempted
+	// Note that this carries a performance impact because at every time a new incomplete range is received reconstruction of the full resource will be attempted
 	CombinePartialResponses bool
 
 	//If ServeStateOnError is true the cache will attempt to serve a stale response in case revalidation fails because the origin server returned a 5xx code or is unreachable

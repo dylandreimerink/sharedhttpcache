@@ -24,7 +24,7 @@ func main() {
 		Handler: originServerHandler,
 	}
 
-	originListener, err := net.Listen("tcp", ":0")
+	originListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
 	}
@@ -38,7 +38,7 @@ func main() {
 
 	cachingServer := &http.Server{}
 
-	cachingListener, err := net.Listen("tcp", ":0")
+	cachingListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
 	}
