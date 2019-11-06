@@ -43,7 +43,7 @@ func (layer *InMemoryCacheLayer) Get(key string) (io.ReadCloser, time.Duration, 
 	defer layer.lock.RUnlock()
 
 	if entity, found := layer.entityStore[key]; found {
-		ttl := entity.Expiration.Sub(time.Now())
+		ttl := time.Until(entity.Expiration)
 
 		//If entry is stale
 		if ttl <= 0 {
@@ -98,14 +98,14 @@ func (layer *InMemoryCacheLayer) Refresh(key string, ttl time.Duration) error {
 		layer.entityStore[key] = entity
 	}
 
-	return errors.New(fmt.Sprintf("Entity with key '%s' doesn't exist", key))
+	return fmt.Errorf("Entity with key '%s' doesn't exist", key)
 }
 
 //WARNING call this function only when the layer is already write locked
 func (layer *InMemoryCacheLayer) replaceCache(neededSize int) error {
 
 	//Loop over all known stale keys and remove them until we have room or there are no more stale keys
-	for key, _ := range layer.staleKeys {
+	for key := range layer.staleKeys {
 		neededSize -= layer.delete(key)
 
 		delete(layer.staleKeys, key)
@@ -117,7 +117,7 @@ func (layer *InMemoryCacheLayer) replaceCache(neededSize int) error {
 	}
 
 	//If we still need room and there are no stale keys start removing fresh entries
-	for key, _ := range layer.entityStore {
+	for key := range layer.entityStore {
 		neededSize -= layer.delete(key)
 
 		//If we have enough space we return

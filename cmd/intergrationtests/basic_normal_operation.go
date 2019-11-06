@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -46,7 +47,10 @@ func firstRequestTest() IntergrationTestScenario {
 					return nil
 				}),
 				OriginHandler: http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-					resp.Write([]byte("Lorem ipsum dolor sit amet, consectetur adipiscing elit"))
+					_, err := resp.Write([]byte("Lorem ipsum dolor sit amet, consectetur adipiscing elit"))
+					if err != nil {
+						fmt.Printf("Error while writing origin response: %s", err.Error())
+					}
 				}),
 				ExpectRequestToOrigin: true,
 				CacheResponseChecker: CacheResponseCheckerFunc(func(resp *http.Response) error {
@@ -89,7 +93,10 @@ func htmlNotCachedByDefault() IntergrationTestScenario {
 					return nil
 				}),
 				OriginHandler: http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-					resp.Write([]byte("<html><head><title>Most basic page ever</title></head></html>"))
+					_, err := resp.Write([]byte("<html><head><title>Most basic page ever</title></head></html>"))
+					if err != nil {
+						fmt.Printf("Error while writing origin response: %s", err.Error())
+					}
 				}),
 				ExpectRequestToOrigin: true,
 				CacheResponseChecker: CacheResponseCheckerFunc(func(resp *http.Response) error {
@@ -103,7 +110,10 @@ func htmlNotCachedByDefault() IntergrationTestScenario {
 					return nil
 				}),
 				OriginHandler: http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-					resp.Write([]byte("Not the same content"))
+					_, err := resp.Write([]byte("Not the same content"))
+					if err != nil {
+						fmt.Printf("Error while writing origin response: %s", err.Error())
+					}
 				}),
 				ExpectRequestToOrigin: true,
 				CacheResponseChecker: CacheResponseCheckerFunc(func(resp *http.Response) error {

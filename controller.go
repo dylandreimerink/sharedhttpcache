@@ -172,7 +172,10 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 					//Check if we are allowed the serve the stale content
 					if MayServeStaleResponse(cacheConfig, cachedResponse) {
 
-						WriteCachedResponse(resp, cachedResponse, ttl)
+						err := WriteCachedResponse(resp, cachedResponse, ttl)
+						if err != nil {
+							controller.Logger.WithError(err).Error("Error while writing stale response to client")
+						}
 
 					} else {
 
@@ -197,7 +200,10 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 						} else {
 							//If we reached this block it means we were able to contact the origin but it returned a 5xx code and are not allowed to serve a stale response
 							//So we have to send the error to the client as per section 4.3.3 of RFC7234
-							WriteHTTPResponse(resp, validationResponse)
+							err := WriteHTTPResponse(resp, validationResponse)
+							if err != nil {
+								controller.Logger.WithError(err).Error("Error while writing validation response to client")
+							}
 						}
 					}
 
@@ -449,7 +455,7 @@ func WriteCachedResponse(rw http.ResponseWriter, cachedResponse *http.Response, 
 
 			//Get the second difference between date and now
 			// this is the apparent_age method described in section 4.2.3 of RFC 7234
-			age = int(time.Now().Sub(date).Seconds())
+			age = int(time.Since(date).Seconds())
 		}
 	}
 

@@ -94,7 +94,7 @@ func ShouldStoreResponse(config *CacheConfig, resp *http.Response) bool {
 		}
 
 		//If the expires is in the future, the response is cacheable
-		if expires.Sub(time.Now()) > 0 {
+		if time.Until(expires) > 0 {
 			return true
 		}
 	}
