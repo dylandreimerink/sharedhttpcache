@@ -1,9 +1,9 @@
 .DEFAULT_GOAL            	:= help #Sets default target
 
-systemtest: ## Execute a system test. The system test starts a http client, server and the shared cache and tests the full function of the cache
-	go test -tags systemtest -covermode count -coverpkg github.com/dylandreimerink/sharedhttpcache,github.com/dylandreimerink/sharedhttpcache/layer -c -o test_output/systemtests github.com/dylandreimerink/sharedhttpcache/cmd/systemtests
-	./test_output/systemtests -test.coverprofile test_output/system_test_coverage.out __DEVEL--i-heard-you-like-tests
-	go tool cover -html=test_output/system_test_coverage.out
+intergrationtest: ## Executes the intergration tests. The intergration test starts a http client, server and the shared cache and tests the full function of the cache
+	go test -tags intergrationtest -covermode count -coverpkg github.com/dylandreimerink/sharedhttpcache,github.com/dylandreimerink/sharedhttpcache/layer -c -o test_output/intergrationtests github.com/dylandreimerink/sharedhttpcache/cmd/intergrationtests
+	./test_output/intergrationtests -test.coverprofile test_output/intergration_test_coverage.out __DEVEL--i-heard-you-like-tests
+	go tool cover -html=test_output/intergration_test_coverage.out
 
 test: ## Executes the unit tests and opens the coverage report in the default browser
 	go test ./... -covermode count -coverprofile test_output/unit_test_coverage.out

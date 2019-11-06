@@ -12,7 +12,7 @@ import (
 	"github.com/dylandreimerink/sharedhttpcache"
 )
 
-var Scenarios []SystemTestScenario
+var Scenarios []IntergrationTestScenario
 
 func main() {
 
@@ -148,21 +148,21 @@ func (o *OriginServerHandler) ServeHTTP(resp http.ResponseWriter, req *http.Requ
 	o.ContentHandler.ServeHTTP(resp, req)
 }
 
-//A SystemTestScenario tests a specific caching scenario which can consists of multiple requests
+//A IntergrationTestScenario tests a specific caching scenario which can consists of multiple requests
 //Every scenario starts with a fresh setup
-type SystemTestScenario struct {
+type IntergrationTestScenario struct {
 	//The name of the scenario
 	Name string
 
 	//The steps to be executed
-	Steps []SystemTestScenarioStep
+	Steps []IntergrationTestScenarioStep
 
 	//The cache controller under test
 	Controller *sharedhttpcache.CacheController
 }
 
-//A SystemTestScenarioStep
-type SystemTestScenarioStep struct {
+//A IntergrationTestScenarioStep
+type IntergrationTestScenarioStep struct {
 	//The Name of the test step
 	Name string
 

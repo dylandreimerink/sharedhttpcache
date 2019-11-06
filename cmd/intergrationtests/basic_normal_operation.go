@@ -27,16 +27,16 @@ func URLMustParse(urlString string) *url.URL {
 }
 
 //firstRequestTest is a basic test which confirms that the first request is proxied to the origin server
-func firstRequestTest() SystemTestScenario {
-	return SystemTestScenario{
+func firstRequestTest() IntergrationTestScenario {
+	return IntergrationTestScenario{
 		Name: "Proxy on first request",
 		Controller: &sharedhttpcache.CacheController{
 			Layers: []layer.CacheLayer{
 				layer.NewInMemoryCacheLayer(64 * 1024 * 1024),
 			},
 		},
-		Steps: []SystemTestScenarioStep{
-			SystemTestScenarioStep{
+		Steps: []IntergrationTestScenarioStep{
+			IntergrationTestScenarioStep{
 				Name: "Second request",
 				ClientRequest: &http.Request{
 					Method: http.MethodGet,
@@ -67,22 +67,22 @@ func firstRequestTest() SystemTestScenario {
 }
 
 //Test that html is not cached if the origin sends no cache directives
-func htmlNotCachedByDefault() SystemTestScenario {
+func htmlNotCachedByDefault() IntergrationTestScenario {
 
 	request := &http.Request{
 		Method: http.MethodGet,
 		URL:    URLMustParse("/lorum-ipsum"),
 	}
 
-	return SystemTestScenario{
+	return IntergrationTestScenario{
 		Name: "Don't cache html by default",
 		Controller: &sharedhttpcache.CacheController{
 			Layers: []layer.CacheLayer{
 				layer.NewInMemoryCacheLayer(64 * 1024 * 1024),
 			},
 		},
-		Steps: []SystemTestScenarioStep{
-			SystemTestScenarioStep{
+		Steps: []IntergrationTestScenarioStep{
+			IntergrationTestScenarioStep{
 				Name:          "First request",
 				ClientRequest: request,
 				CacheRequestChecker: CacheRequestCheckerFunc(func(req *http.Request) error {
@@ -96,7 +96,7 @@ func htmlNotCachedByDefault() SystemTestScenario {
 					return nil
 				}),
 			},
-			SystemTestScenarioStep{
+			IntergrationTestScenarioStep{
 				Name:          "Second request",
 				ClientRequest: request,
 				CacheRequestChecker: CacheRequestCheckerFunc(func(req *http.Request) error {
