@@ -178,7 +178,7 @@ func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 			sMaxAgeString := strings.TrimPrefix(directive, SMaxAgeDirective+"=")
 			sMaxAge, err := strconv.ParseInt(sMaxAgeString, 10, 0)
 
-			if err != nil {
+			if err == nil {
 				return time.Duration(sMaxAge) * time.Second
 			}
 		}
@@ -194,7 +194,7 @@ func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 			maxAgeString := strings.TrimPrefix(directive, MaxAgeDirective+"=")
 			maxAge, err := strconv.ParseInt(maxAgeString, 10, 0)
 
-			if err != nil {
+			if err == nil {
 				return time.Duration(maxAge) * time.Second
 			}
 		}
@@ -227,6 +227,7 @@ func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 	return -1
 }
 
+//RequestOrResponseHasNoCache checks if a response or its request contains a no-cache directive in the Cache-Control header
 func RequestOrResponseHasNoCache(resp *http.Response) bool {
 
 	for _, directive := range SplitCacheControlHeader(resp.Header.Get(CacheControlHeader)) {
@@ -276,7 +277,7 @@ func IsMethodCacheable(config *CacheConfig, method string) bool {
 	return false
 }
 
-//IsCacheableByExtension checks if a response is cacheable based on supported Cache-Control extensions
+//IsResponseCacheableByExtension checks if a response is cacheable based on supported Cache-Control extensions
 // https://tools.ietf.org/html/rfc7234#section-5.2.3
 func IsResponseCacheableByExtension(config *CacheConfig, resp *http.Response) bool {
 	//TODO find and implement cache extension

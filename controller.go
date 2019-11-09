@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"io"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -139,10 +140,69 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 			//So replace it
 			cachedResponse.Request = req
 
+			//The value of of the max-age header
+			maxAge := int64(-1)
+
+			//The value we will need to compare the cache entry ttl to
+			compareTTL := int64(0)
+
+			for _, directive := range SplitCacheControlHeader(req.Header.Get(CacheControlHeader)) {
+				if strings.HasPrefix(directive, MaxAgeDirective) {
+					//TODO check ofr quoted-string form
+					maxAgeString := strings.TrimPrefix(directive, MaxAgeDirective+"=")
+					maxAge, err = strconv.ParseInt(maxAgeString, 10, 0)
+					if err != nil {
+						//TODO make a warning log of the protocol violation
+						maxAge = -1
+					}
+					continue
+				}
+
+				if strings.HasPrefix(directive, "max-stale") {
+					//TODO check ofr quoted-string form
+					maxStaleString := strings.TrimPrefix(directive, "max-stale=")
+					maxStale, err := strconv.ParseInt(maxStaleString, 10, 0)
+
+					compareTTL = -maxStale
+
+					//If error no (valid) value is specified and thus any stale response is accepted
+					if err != nil {
+						compareTTL = math.MinInt64
+					}
+					continue
+				}
+
+				if strings.HasPrefix(directive, "min-fresh") {
+					//TODO check ofr quoted-string form
+					minFreshString := strings.TrimPrefix(directive, "min-fresh=")
+					compareTTL, err = strconv.ParseInt(minFreshString, 10, 0)
+					if err != nil {
+						//TODO make a warning log of the protocol violation
+						compareTTL = 0
+					}
+					continue
+				}
+			}
+
+			clientWantsResponse := true
+
+			//If compareTTL is negative the max-stale directive is set and if max-age is defined
+			if compareTTL >= 0 && maxAge > -1 {
+
+				//Get the age of the cached response
+				responseAge := getResponseAge(cachedResponse)
+
+				//if the cache is older than the client requested
+				if responseAge > maxAge {
+					clientWantsResponse = false
+				}
+
+			}
+
 			//If response is fresh and we don't have to revalidate because of a no-cache directive
 			//TODO test against the allowed age and freshness specified in section 5.2.1.1, 5.2.1.2 and 5.2.1.3 of RFC7234
 			//TODO check if response must be revalidated (must-revalidate and proxy-revalidate)
-			if ttl > 0 && !RequestOrResponseHasNoCache(cachedResponse) {
+			if ttl > (time.Duration(compareTTL)*time.Second) && !RequestOrResponseHasNoCache(cachedResponse) && clientWantsResponse {
 
 				err = WriteCachedResponse(resp, cachedResponse, ttl)
 				if err != nil {
@@ -334,6 +394,8 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 	}
 }
 
+//StoreResponseInCache stores the given response in the cache under the cacheKey
+//The main difference with StoreInCache is that this function handels the generation of the byte representation of the response
 func (controller *CacheController) StoreResponseInCache(cacheKey string, response *http.Response, ttl time.Duration) error {
 
 	pipeReader, pipeWriter := io.Pipe()
@@ -362,7 +424,7 @@ func (controller *CacheController) StoreResponseInCache(cacheKey string, respons
 	return nil
 }
 
-//StoreSecondaryKeysInCache
+//StoreSecondaryKeysInCache creates a special purpose cache entry which stores a list of header names used as secondary cache keys
 func (controller *CacheController) StoreSecondaryKeysInCache(primaryCacheKey string, keys []string, ttl time.Duration) error {
 
 	secondaryCacheKeys := "secondary-keys" + primaryCacheKey
@@ -402,6 +464,7 @@ func MayServeStaleResponse(cacheConfig *CacheConfig, response *http.Response) bo
 	return true
 }
 
+//MayServeStaleResponseByExtension checks if there are any Cache-Control extensions which allow stale responses to be served
 func MayServeStaleResponseByExtension(cacheConfig *CacheConfig, response *http.Response) bool {
 
 	//TODO implement https://tools.ietf.org/html/rfc5861
@@ -409,6 +472,7 @@ func MayServeStaleResponseByExtension(cacheConfig *CacheConfig, response *http.R
 	return false
 }
 
+//ProxyToOrigin proxies a request to a origin server using the given config and return the response
 func ProxyToOrigin(transport http.RoundTripper, forwardConfig *ForwardConfig, req *http.Request) (*http.Response, error) {
 	//TODO be a proper reverse proxy https://golang.org/src/net/http/httputil/reverseproxy.go?s=3318:3379#L177
 	// TODO Remove hop to hop headers
@@ -427,6 +491,7 @@ func ProxyToOrigin(transport http.RoundTripper, forwardConfig *ForwardConfig, re
 	return transport.RoundTrip(req)
 }
 
+//WriteHTTPResponse writes a response the response writer
 func WriteHTTPResponse(rw http.ResponseWriter, response *http.Response) error {
 	//Set all response headers in the response writer
 	for key, values := range response.Header {
@@ -442,31 +507,43 @@ func WriteHTTPResponse(rw http.ResponseWriter, response *http.Response) error {
 	return err
 }
 
-//WriteCachedResponse writes a cached response to a response writer
-// this function should be used to write cached responses because it modifies the response to comply with the RFC's
-func WriteCachedResponse(rw http.ResponseWriter, cachedResponse *http.Response, ttl time.Duration) error {
+func getResponseAge(response *http.Response) int64 {
+	age := int64(-1)
 
-	age := -1
-
-	dateString := cachedResponse.Header.Get(DateHeader)
+	dateString := response.Header.Get(DateHeader)
 	if dateString != "" {
 		date, err := http.ParseTime(dateString)
 		if err == nil {
 
 			//Get the second difference between date and now
 			// this is the apparent_age method described in section 4.2.3 of RFC 7234
-			age = int(time.Since(date).Seconds())
+			age = int64(time.Since(date).Seconds())
 		}
 	}
 
+	//The age of a response can't be in the future
+	if age < -1 {
+		age = -1
+	}
+
+	return age
+}
+
+//WriteCachedResponse writes a cached response to a response writer
+// this function should be used to write cached responses because it modifies the response to comply with the RFC's
+func WriteCachedResponse(rw http.ResponseWriter, cachedResponse *http.Response, ttl time.Duration) error {
+
+	age := getResponseAge(cachedResponse)
+
 	//If the age is positive we add the header. Negative ages are not allowed
 	if age >= 0 {
-		cachedResponse.Header.Set("Age", strconv.Itoa(age))
+		cachedResponse.Header.Set("Age", strconv.FormatInt(age, 10))
 	}
 
 	return WriteHTTPResponse(rw, cachedResponse)
 }
 
+//RefreshCacheEntry updates the ttl of the given cacheKey
 func (controller *CacheController) RefreshCacheEntry(cacheKey string, ttl time.Duration) error {
 
 	for _, cacheLayer := range controller.Layers {
@@ -547,7 +624,7 @@ func (controller *CacheController) FindResponseInCache(cacheKey string) (*http.R
 	return nil, -1, nil
 }
 
-//FindSecondaryKeyIndexInCache attempts to find the secondary keys defined for a set of responses with the given primary cache key
+//FindSecondaryKeysInCache attempts to find the secondary keys defined for a set of responses with the given primary cache key
 //It does this by prepending "secondary-keys" to the cache key and splitting the result on newlines
 //
 //If no secondary keys exist or can't be found in the cache a slice of zero length will be returned

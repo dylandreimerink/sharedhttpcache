@@ -79,7 +79,11 @@ func main() {
 					if step.ExpectRequestToOrigin {
 						//If we do we check if the content is expected
 
-						originErrorChannel <- step.CacheRequestChecker.RequestExpected(request)
+						if step.CacheRequestChecker != nil {
+							originErrorChannel <- step.CacheRequestChecker.RequestExpected(request)
+						} else {
+							originErrorChannel <- nil
+						}
 					} else {
 						//If not give a error
 

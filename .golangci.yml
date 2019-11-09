@@ -3,6 +3,9 @@ run:
   # include test files or not, default is true
   tests: false
 
+  skip-dirs:
+    - cmd/intergrationtests
+
 linters:
   enable:
     - misspell
