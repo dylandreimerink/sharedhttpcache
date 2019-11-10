@@ -32,7 +32,9 @@ For library examples please go the the [godoc page](https://godoc.org/github.com
 - Calculating Heuristic Freshness based on past behavior
 - Refactor code to improve readability
 - Add informational headers about cache hit's ect.
+- Add websocket support
 - Add HTTP/2 push support
+- Add optional [RFC7239](https://tools.ietf.org/html/rfc7239) support
 - http cache-aware server-push [link](https://github.com/h2o/h2o/issues/421)
 - Add Cache-Control extensions (Or at least make a callback so someone can from outside the package)
   - [RFC5861 - HTTP Cache-Control Extensions for Stale Content](https://tools.ietf.org/html/rfc5861)
