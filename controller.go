@@ -203,8 +203,6 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 			}
 
 			//If response is fresh and we don't have to revalidate because of a no-cache directive
-			//TODO test against the allowed age and freshness specified in section 5.2.1.1, 5.2.1.2 and 5.2.1.3 of RFC7234
-			//TODO check if response must be revalidated (must-revalidate and proxy-revalidate)
 			if ttl > (time.Duration(compareTTL)*time.Second) && !RequestOrResponseHasNoCache(cachedResponse) && clientWantsResponse {
 
 				err = WriteCachedResponse(resp, cachedResponse, ttl)
@@ -229,7 +227,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 					defer cancel()
 				}
 
-				validationResponse, err := ProxyToOrigin(transport, forwardConfig, revalidationRequest, ctx)
+				validationResponse, err := ProxyToOrigin(ctx, transport, forwardConfig, revalidationRequest)
 
 				//If the origin server can't be reached or a error is returned
 				if err != nil || validationResponse.StatusCode > 500 {
@@ -320,7 +318,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 			defer cancel()
 		}
 
-		response, err = ProxyToOrigin(transport, forwardConfig, req, ctx)
+		response, err = ProxyToOrigin(ctx, transport, forwardConfig, req)
 		if err != nil {
 
 			//Log as a warning since errors here are exprected when a origin server is down
@@ -343,8 +341,6 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 	}
 
 	//TODO invalidate cache entries, unsafe methods can invalidate other cache entries
-
-	//TODO remove response hop-to-hop headers https://golang.org/src/net/http/httputil/reverseproxy.go?s=3318:3379#L264
 
 	//If the response is cacheable
 	if ShouldStoreResponse(cacheConfig, response) {
@@ -478,7 +474,7 @@ func (controller *CacheController) StoreSecondaryKeysInCache(primaryCacheKey str
 func MayServeStaleResponse(cacheConfig *CacheConfig, response *http.Response) bool {
 
 	//If serving of stale responses is turned off
-	if !cacheConfig.ServeStateOnError {
+	if !cacheConfig.ServeStaleOnError {
 		return false
 	}
 
@@ -540,7 +536,7 @@ var hopHeaders = []string{
 }
 
 //ProxyToOrigin proxies a request to a origin server using the given config and return the response
-func ProxyToOrigin(transport http.RoundTripper, forwardConfig *ForwardConfig, req *http.Request, forwardContext context.Context) (*http.Response, error) {
+func ProxyToOrigin(forwardContext context.Context, transport http.RoundTripper, forwardConfig *ForwardConfig, req *http.Request) (*http.Response, error) {
 	//TODO add websocket support
 
 	//Clone the request

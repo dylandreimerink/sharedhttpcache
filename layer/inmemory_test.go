@@ -17,7 +17,7 @@ func TestInMemoryCacheLayer_Get(t *testing.T) {
 	}
 
 	if duration != 0 {
-		t.Error("Duration of non existant object should be 0")
+		t.Error("Duration of non existent object should be 0")
 		return
 	}
 

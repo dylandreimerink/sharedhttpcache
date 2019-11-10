@@ -49,9 +49,9 @@ type CacheConfig struct {
 	// Note that this carries a performance impact because at every time a new incomplete range is received reconstruction of the full resource will be attempted
 	CombinePartialResponses bool
 
-	//If ServeStateOnError is true the cache will attempt to serve a stale response in case revalidation fails because the origin server returned a 5xx code or is unreachable
+	//If ServeStaleOnError is true the cache will attempt to serve a stale response in case revalidation fails because the origin server returned a 5xx code or is unreachable
 	//This setting respects the Cache-Control header of the client and server.
-	ServeStateOnError bool
+	ServeStaleOnError bool
 
 	//If HTTPWarnings is true warnings as described in section 5.5 of RFC7234 will be added to HTTP responses
 	// This is a option because the feature will be removed from future HTTP specs https://github.com/httpwg/http-core/issues/139
@@ -68,7 +68,7 @@ func NewCacheConfig() *CacheConfig {
 		CacheIncompleteResponses: false, //Disable this feature by default because it impacts performance
 		CombinePartialResponses:  false, //Disable this feature by default because it impacts performance
 
-		ServeStateOnError: true, //No reason not to do it by default
+		ServeStaleOnError: true, //No reason not to do it by default
 
 		HTTPWarnings: true, //Be RFC compliant by default
 
