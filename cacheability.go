@@ -250,6 +250,18 @@ func RequestOrResponseHasNoCache(resp *http.Response) bool {
 	return false
 }
 
+//ResponseHasMustRevalidate checks if a response contains a must-revalidate or proxy-revalidate directive in the Cache-Control header
+func ResponseHasMustRevalidate(resp *http.Response) bool {
+
+	for _, directive := range SplitCacheControlHeader(resp.Header.Get(CacheControlHeader)) {
+		if strings.TrimSpace(directive) == MustRevalidateDirective || strings.TrimSpace(directive) == ProxyRevalidateDirective {
+			return true
+		}
+	}
+
+	return false
+}
+
 //IsMethodSafe checks if a request method is safe
 func IsMethodSafe(config *CacheConfig, method string) bool {
 	//Check if the request method is safe

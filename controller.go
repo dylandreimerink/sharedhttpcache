@@ -203,8 +203,10 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 
 			}
 
-			//If response is fresh and we don't have to revalidate because of a no-cache directive
-			if ttl > (time.Duration(compareTTL)*time.Second) && !RequestOrResponseHasNoCache(cachedResponse) && clientWantsResponse {
+			if ttl > (time.Duration(compareTTL)*time.Second) && //If the response is older than the TTL it is stale
+				!RequestOrResponseHasNoCache(cachedResponse) && //If the request or response containse a no-cache we can't return a cached result
+				!ResponseHasMustRevalidate(cachedResponse) && //If the response contains a must-revalidate, we must always revalidate, can serve from cache
+				clientWantsResponse { //If the client wants a response which is fresher than what we have, we can't serve the cached response
 
 				err = WriteCachedResponse(resp, cachedResponse, ttl)
 				if err != nil {

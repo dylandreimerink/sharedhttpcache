@@ -96,6 +96,7 @@ func (layer *InMemoryCacheLayer) Refresh(key string, ttl time.Duration) error {
 	if entity, found := layer.entityStore[key]; found {
 		entity.Expiration = time.Now().Add(ttl)
 		layer.entityStore[key] = entity
+		return nil
 	}
 
 	return fmt.Errorf("Entity with key '%s' doesn't exist", key)

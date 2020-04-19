@@ -17,6 +17,7 @@ func init() {
 		firstRequestTest(),
 		htmlNotCachedByDefault(),
 		properReverseProxyBehavior(),
+		revalidateEtag(),
 	)
 }
 
@@ -182,6 +183,85 @@ func htmlNotCachedByDefault() IntergrationTestScenario {
 
 					if string(body) != "Not the same content" {
 						return errors.New("Got cached response, expected to get fresh response from origin server")
+					}
+
+					return nil
+				}),
+			},
+		},
+	}
+}
+
+//revalidateEtag tests that when a response contains a ETag it is properly revalidated
+func revalidateEtag() IntergrationTestScenario {
+	return IntergrationTestScenario{
+		Name: "Revalidate ETags",
+		Controller: &sharedhttpcache.CacheController{
+			Layers: []layer.CacheLayer{
+				layer.NewInMemoryCacheLayer(64 * 1024 * 1024),
+			},
+		},
+		Steps: []IntergrationTestScenarioStep{
+			IntergrationTestScenarioStep{
+				Name: "Cache initial request",
+				ClientRequest: &http.Request{
+					Method: http.MethodGet,
+					URL:    URLMustParse("/lorum-ipsum"),
+				},
+				CacheRequestChecker: CacheRequestCheckerFunc(func(req *http.Request) error {
+					return nil
+				}),
+				OriginHandler: http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
+					//Ask the cache to always revalidate this response with the origin server
+					resp.Header().Set("Cache-Control", "public, must-revalidate")
+
+					//Set a ETag which should be used to revalidate this request
+					resp.Header().Set("Etag", "\"AABBCCDDEE\"")
+
+					_, err := resp.Write([]byte("Lorem ipsum dolor sit amet, consectetur adipiscing elit"))
+					if err != nil {
+						fmt.Printf("Error while writing origin response: %s", err.Error())
+					}
+				}),
+				ExpectRequestToOrigin: true,
+				CacheResponseChecker: CacheResponseCheckerFunc(func(resp *http.Response) error {
+					body, err := ioutil.ReadAll(resp.Body)
+					if err != nil {
+						return err
+					}
+
+					if string(body) != "Lorem ipsum dolor sit amet, consectetur adipiscing elit" {
+						return errors.New("Expected response to be equal to the body sent by the origin server")
+					}
+
+					return nil
+				}),
+			},
+			IntergrationTestScenarioStep{
+				Name: "Second request, ETag match",
+				ClientRequest: &http.Request{
+					Method: http.MethodGet,
+					URL:    URLMustParse("/lorum-ipsum"),
+				},
+				CacheRequestChecker: CacheRequestCheckerFunc(func(req *http.Request) error {
+					if req.Header.Get("If-None-Match") != "\"AABBCCDDEE\"" {
+						return errors.New("Expected request to contain a If-None-Match header with the value: \"AABBCCDDEE\"")
+					}
+
+					return nil
+				}),
+				OriginHandler: http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
+					resp.WriteHeader(http.StatusNotModified)
+				}),
+				ExpectRequestToOrigin: true,
+				CacheResponseChecker: CacheResponseCheckerFunc(func(resp *http.Response) error {
+					body, err := ioutil.ReadAll(resp.Body)
+					if err != nil {
+						return err
+					}
+
+					if string(body) != "Lorem ipsum dolor sit amet, consectetur adipiscing elit" {
+						return errors.New("Expected response to be equal to the body sent by the origin server in the first request")
 					}
 
 					return nil
