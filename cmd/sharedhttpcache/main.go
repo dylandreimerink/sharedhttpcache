@@ -2,14 +2,21 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
+	"github.com/dylandreimerink/sharedhttpcache/layer"
+
 	"github.com/dylandreimerink/sharedhttpcache"
 
 	"github.com/spf13/pflag"
@@ -19,13 +26,13 @@ import (
 //Config is the structure for the configuration file
 type Config struct {
 	//CacheConfig is the configurate that determins how the caching part of the caching server should behave
-	CacheConfig *CacheConfig `mapstructure:"cache_config"`
+	CacheConfig CacheConfig `mapstructure:"cache_config"`
 
 	//ListenConfig is the configuration that determins how the http server part of the caching server should behave
-	ListenConfig *ListenConfig `mapstructure:"listen_config"`
+	ListenConfig ListenConfig `mapstructure:"listen_config"`
 
 	//ForwardConfig is the configuration that determins how the http client part of the caching server should behave
-	ForwardConfig *ForwardConfig `mapstructure:"forward_config"`
+	ForwardConfig ForwardConfig `mapstructure:"forward_config"`
 }
 
 type ForwardConfig struct {
@@ -33,15 +40,22 @@ type ForwardConfig struct {
 	ForwardProxyMode bool `mapstructure:"forward_proxy_mode"`
 
 	//DefaultHost is the default hostname / ip the request will be forwared to if there is no host specific forward config
-	DefaultForwardConfig *ForwardHostConfig `mapstructure:"default_forward_config"`
+	DefaultForwardConfig ForwardHostConfig `mapstructure:"default_forward_config"`
 
 	//PerHostForwardConfig is used to match a requested hostname to the correct forward config
-	PerHostForwardConfig map[string]*ForwardConfig
+	PerHostForwardConfig []ForwardHostConfig `mapstructure:"per_host"`
 }
 
 type ForwardHostConfig struct {
-	//Host is the hostname of the origin server the request will be forwared to
 	Host string `mapstructure:"host"`
+
+	//Host is the hostname of the origin server the request will be forwared to
+	Origin string `mapstructure:"origin"`
+
+	//If specified this IP address will be used instead of the IP address which is resolved from the origin hostname
+	OriginIP string `mapstructure:"origin_ip"`
+
+	EnableTLS bool `mapstructure:"tls"`
 
 	//EnableHTTP2 if true we will attempt to make a HTTP2 connection to the origin server
 	EnableHTTP2 bool `mapstructure:"http2"`
@@ -55,10 +69,12 @@ type ListenConfig struct {
 	EnableTLS bool `mapstructure:"tls"`
 
 	//RedirectToTLS if true the http endpoint will always redirect to the https endpoint
-	RedirectToTLS bool
+	RedirectToTLS bool `mapstructure:"redirect_to_tls"`
 
 	//ListenAddress is the address on which the caching server will listen for http connections
 	TLSListenAddress string `mapstructure:"tls_address"`
+
+	TLSCertificates []TLSCertificate `mapstructure:"tls_certs"`
 
 	//EnableHTTP2 if true the caching server will accept HTTP2 connections
 	EnableHTTP2 bool `mapstructure:"http2"`
@@ -69,7 +85,12 @@ type ListenConfig struct {
 
 	//AcceptedHosts is a list of hostnames / ip addresses for which we accept requests
 	//requests for hosts other than the once specified will retult in a 403 status code will be returned unless AcceptAnyHost is enabled
-	AcceptedHosts []string
+	AcceptedHosts []string `mapstructure:"accepted_hosts"`
+}
+
+type TLSCertificate struct {
+	CertificatePath string `mapstructure:"cert"`
+	KeyPath         string `mapstructure:"key"`
 }
 
 type CacheConfig struct {
@@ -178,6 +199,8 @@ func init() {
 		404: "3m",
 		410: "3m",
 	})
+
+	viper.SetDefault("forward_config.forward_proxy_mode", true)
 }
 
 var config Config
@@ -196,7 +219,200 @@ func main() {
 		os.Exit(1)
 	}
 
-	spew.Dump(config)
+	errChan := make(chan error)
+
+	// Setup interrupt handler. This optional step configures the process so
+	// that SIGINT and SIGTERM signals cause the services to stop gracefully.
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+		errChan <- fmt.Errorf("%s", <-c)
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+
+	err = startServer(ctx, errChan, &wg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err.Error())
+		os.Exit(1)
+	}
+
+	if err := <-errChan; err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err.Error())
+	}
+
+	fmt.Println("Exiting")
+
+	cancel()
+
+	wg.Wait()
+
+	fmt.Println("Exited")
+}
+
+func startServer(ctx context.Context, errChan chan error, wg *sync.WaitGroup) error {
+
+	//Create the real cache config from the yaml cache config struct
+	cacheConfig, err := config.CacheConfig.toRealCacheConfig()
+	if err != nil {
+		return err
+	}
+
+	//Instansiate the cache controller
+	cacheController := &sharedhttpcache.CacheController{
+		DefaultCacheConfig: cacheConfig,
+	}
+
+	//Set the storage layers of the cache controller
+	//TODO make this configurable
+	cacheController.Layers = []layer.CacheLayer{
+		layer.NewInMemoryCacheLayer(1024 * 1024 * 128),
+	}
+
+	systemCertPool, err := x509.SystemCertPool()
+	if err != nil {
+		return err
+	}
+
+	cacheController.DefaultTransport = &http.Transport{
+		TLSClientConfig: &tls.Config{
+			RootCAs: systemCertPool,
+		},
+		DisableCompression: true,
+	}
+
+	//If we are in forward proxy mode we forward to the same hostname we got in the request
+	if config.ForwardConfig.ForwardProxyMode {
+		cacheController.ForwardConfigResolver = sharedhttpcache.ForwardConfigResolverFunc(func(req *http.Request) *sharedhttpcache.ForwardConfig {
+			return &sharedhttpcache.ForwardConfig{
+				Host: req.Host,
+			}
+		})
+	} else {
+
+		forwardConfigMap := map[string]ForwardHostConfig{}
+		for _, forwardConfig := range config.ForwardConfig.PerHostForwardConfig {
+			forwardConfigMap[forwardConfig.Host] = forwardConfig
+		}
+
+		//If we are not in forward proxy mode we first look at the 'per host' config or fallback on the default config
+		cacheController.ForwardConfigResolver = sharedhttpcache.ForwardConfigResolverFunc(func(req *http.Request) *sharedhttpcache.ForwardConfig {
+
+			forwardConfig := config.ForwardConfig.DefaultForwardConfig
+
+			host, _, err := net.SplitHostPort(req.Host)
+			if err == nil {
+				var found bool
+				forwardConfig, found = forwardConfigMap[host]
+				if !found {
+					forwardConfig = config.ForwardConfig.DefaultForwardConfig
+				}
+			}
+
+			return &sharedhttpcache.ForwardConfig{
+				Host: forwardConfig.Origin,
+				TLS:  forwardConfig.EnableTLS,
+			}
+		})
+
+		//TODO make dialer configurable
+		dialer := &net.Dialer{
+			Timeout: 15 * time.Second,
+		}
+
+		cacheController.TransportResolver = sharedhttpcache.TransportResolverFunc(func(req *http.Request) http.RoundTripper {
+
+			reqHost, _, err := net.SplitHostPort(req.Host)
+			if err != nil {
+				reqHost = req.Host
+			}
+
+			forwardConfig, found := forwardConfigMap[reqHost]
+			if !found {
+				return nil
+			}
+
+			_, originPort, err := net.SplitHostPort(forwardConfig.Origin)
+			if err != nil {
+				if forwardConfig.EnableTLS {
+					originPort = "443"
+				} else {
+					originPort = "80"
+				}
+			}
+
+			transport := &http.Transport{
+				TLSClientConfig: &tls.Config{
+					RootCAs: systemCertPool,
+				},
+				DisableCompression: true,
+			}
+
+			if forwardConfig.OriginIP != "" {
+				transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+					newAddr := forwardConfig.OriginIP
+					newAddr += ":" + originPort
+
+					return dialer.DialContext(ctx, network, newAddr)
+				}
+			}
+
+			return transport
+		})
+	}
+
+	(*wg).Add(1)
+	go func() {
+		defer (*wg).Done()
+
+		//Initialize the http server
+		httpServer := &http.Server{
+			Handler: http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				cacheController.ServeHTTP(rw, req)
+			}),
+		}
+
+		httpListener, err := net.Listen("tcp", config.ListenConfig.ListenAddress)
+		if err != nil {
+			errChan <- err
+			return
+		}
+
+		go func() {
+			fmt.Printf("Started listening for http requests on %s\n", httpListener.Addr())
+			errChan <- httpServer.Serve(httpListener)
+		}()
+
+		if config.ListenConfig.EnableTLS {
+			tlsConfig := &tls.Config{
+				Certificates: []tls.Certificate{},
+			}
+
+			for _, paths := range config.ListenConfig.TLSCertificates {
+				cert, err := tls.LoadX509KeyPair(paths.CertificatePath, paths.KeyPath)
+				if err != nil {
+					errChan <- err
+					return
+				}
+				tlsConfig.Certificates = append(tlsConfig.Certificates, cert)
+			}
+
+			tlsListener, err := tls.Listen("tcp", config.ListenConfig.TLSListenAddress, tlsConfig)
+			if err != nil {
+				errChan <- err
+				return
+			}
+
+			go func() {
+				fmt.Printf("Started listening for https requests on %s\n", tlsListener.Addr())
+				errChan <- httpServer.Serve(tlsListener)
+			}()
+		}
+
+	}()
+
+	return nil
 }
 
 func initConfig() error {

@@ -111,6 +111,14 @@ type TransportResolver interface {
 	GetTransport(req *http.Request) http.RoundTripper
 }
 
+//The TransportResolverFunc type is an adapter to allow the use of ordinary functions as TransportResolver
+type TransportResolverFunc func(req *http.Request) http.RoundTripper
+
+//GetForwardConfig calls the underlying function to resolve a round tripper from a request
+func (resolver TransportResolverFunc) GetTransport(req *http.Request) http.RoundTripper {
+	return resolver(req)
+}
+
 //The ForwardConfig holds information about how to forward traffic to the origin server
 type ForwardConfig struct {
 	//Can be a Hostname or a IP address and optionally the tcp port

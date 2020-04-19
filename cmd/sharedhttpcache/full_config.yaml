@@ -1,0 +1,125 @@
+cache_config:
+  # cacheable_methods a list of request methods for which responses may be cached.
+  # It is not advisable to cache unsafe methods like POST. Tho it is possible to do so
+  # Note that unsafe methods will not be cached even if they are in this list as per section 4 of RFC7234
+  cacheable_methods:
+    - GET
+
+  # safe_methods a list of "safe" request methods as defined in section 4.2.1 of RFC7231
+  # Any method not in this list is considered unsafe and will not be cached
+  # If a request is made with a unsafe method it may cause invalidation as per section 4.4 of RFC7234
+  safe_methods:
+    - GET
+    - HEAD
+    - OPTIONS
+    - TRACE
+
+  # cache_incomplete_responses enables or disables the optional feature mentioned in section 3.1 of RFC7234
+  # Caching of incomplete requests will cache responses with status code 206 (Partial Content)
+  #
+  # Note that this carries a performance impact because ranges have to be accounted for when storing and querying the cached content
+  cache_incomplete_responses: true
+
+  # combine_partial_responses enables or disables the optional feature mentioned in section 3.3 of RFC7234
+  # When this feature is enabled and incomplete responses are enabled
+  # the caching server attempts to combine multiple incomplete responses into a complete response.
+  #
+  # Note that this carries a performance impact because at every time a new incomplete range is received reconstruction of the full resource will be attempted
+  combine_partial_responses: true
+
+  # If ServeStaleOnError is true the cache will attempt to serve a stale response in case revalidation fails because the origin server returned a 5xx code or is unreachable
+  # This setting respects the Cache-Control header of the client and server.
+  serve_stale_on_error: true
+
+  # If HTTPWarnings is true warnings as described in section 5.5 of RFC7234 will be added to HTTP responses
+  # This is a option because the feature will be removed from future HTTP specs https://github.com/httpwg/http-core/issues/139
+  http_warnings: true
+
+  # default_expiration_per_status_code is a map of times index by the http response code
+  #
+  # These times will be used as default expiration time unless the response contains a header which specifies a different
+  #
+  # Not all responses should be cached for the same duration.
+  # A 307 Temporary Redirect for example should be cached for less time than a 301 Moved Permanently
+  #
+  # Codes not appearing in this list will be considered NOT understood and thus make a response uncacheable according to section 3 of RFC7234.
+  default_expiration_per_status_code: 
+    200: "2h"
+    206: "2h"
+    301: "2h"
+    302: "20m"
+    303: "20m"
+    403: "1m"
+    404: "3m"
+    410: "3m"
+
+  # cacheable_file_extensions is a list of cacheable file extensions
+  # File extensions are used instead of MIME types because the same file extension can have separate MIME types
+  # It is advised to only use static file types like stylesheets or images and not dynamic content like html
+  cacheable_file_extensions: [
+    "bmp", "ejs", "jpeg", "pdf", "ps", "ttf",
+    "class", "eot", "jpg", "pict", "svg", "webp",
+    "css", "eps", "js", "pls", "svgz", "woff",
+    "csv", "gif", "mid", "png", "swf", "woff2",
+    "doc", "ico", "midi", "ppt", "tif", "xls",
+    "docx", "jar", "otf", "pptx", "tiff", "xlsx"
+  ]
+
+listen_config:
+  # The address on which the caching server will listen for http connections
+  address: "127.0.0.1:80"
+
+  # If true the caching server will listen for tls/https connections
+  tls: true
+
+  # The address on which the caching server will listen for http connections
+  tls_address: "127.0.0.1:443"
+
+  # If true the http endpoint will always redirect to the https endpoint
+  redirect_to_tls: true
+
+  # A list of TLS cert and key pairs which will be served by the HTTPS server
+  # Depending on the SNI domain name in the TLS Client Hello the correct certificate is selected
+  tls_certs:
+  - cert:
+    key:
+
+  # If true the caching server will accept HTTP2 connections, will only have effect if TLS is enabled
+  http2: false
+
+  # If true allows requests for any hostname
+  # Usefull when using as forward proxy
+  accept_any_host: false
+
+  # A list of hostnames / ip addresses for which we accept requests
+  # requests for hosts other than the once specified will retult in a 403 status code will be returned unless AcceptAnyHost is enabled
+  accepted_hosts:
+  - example.com
+
+forward_config:
+  # If enabled the request will be forwared to the domain name / ip in the Host header
+  forward_proxy_mode: false
+
+  # The default hostname / ip the request will be forwared to if there is no host specific forward config
+  default_forward_config:
+    host: "example.com"
+    origin: "example.com"
+    origin_ip: "185.8.176.120"
+    tls: true
+
+  # Used to match a requested hostname to the correct forward config
+  per_host:
+    # The hostname which will be matched agains the request recieved by the caching server
+  - host: "example.com"
+
+    # Is the hostname of the origin server the request will be forwared to
+    origin: "example.com"
+
+    # If specified this IP address will be used instead of the IP address which is resolved from the origin hostname
+    origin_ip: ""
+
+    # If true the request to the origin server will be sent to over TLS
+    tls: true
+
+    # If true the caching server will attempt to make a HTTP/2 request to the origin server before falling back to HTTP/1
+    http2: false

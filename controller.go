@@ -3,6 +3,7 @@ package sharedhttpcache
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"math"
@@ -446,11 +447,11 @@ func (controller *CacheController) StoreResponseInCache(cacheKey string, respons
 	writeErr := <-writeErrChan
 
 	if storeErr != nil {
-		return storeErr
+		return fmt.Errorf("Store error: %w", storeErr)
 	}
 
 	if writeErr != nil {
-		return writeErr
+		return fmt.Errorf("Write error: %w", writeErr)
 	}
 
 	return nil
@@ -603,8 +604,9 @@ func ProxyToOrigin(forwardContext context.Context, transport http.RoundTripper, 
 		outreq.URL.Scheme = "http"
 	}
 
-	//Change the host in the url
+	//Change the host in the url and request body
 	outreq.URL.Host = forwardConfig.Host
+	outreq.Host = forwardConfig.Host
 
 	//Forward request to origin server
 	response, err := transport.RoundTrip(outreq)
