@@ -16,13 +16,13 @@ type InMemoryCacheLayer struct {
 	//Maximum size of the cache in bytes
 	MaxSize int
 
-	entityStore map[string]inMemoryCacheEntity
+	entityStore      map[string]inMemoryCacheEntity
+	entityStoreMutex sync.RWMutex
 
 	currentSize int
 
-	lock sync.RWMutex
-
-	staleKeys map[string]bool
+	staleKeys      map[string]bool
+	staleKeysMutex sync.Mutex
 }
 
 type inMemoryCacheEntity struct {
@@ -39,15 +39,17 @@ func NewInMemoryCacheLayer(maxSize int) *InMemoryCacheLayer {
 }
 
 func (layer *InMemoryCacheLayer) Get(key string) (io.ReadCloser, time.Duration, error) {
-	layer.lock.RLock()
-	defer layer.lock.RUnlock()
+	layer.entityStoreMutex.RLock()
+	defer layer.entityStoreMutex.RUnlock()
 
 	if entity, found := layer.entityStore[key]; found {
 		ttl := time.Until(entity.Expiration)
 
 		//If entry is stale
 		if ttl <= 0 {
+			layer.staleKeysMutex.Lock()
 			layer.staleKeys[key] = true
+			layer.staleKeysMutex.Unlock()
 		}
 
 		return ioutil.NopCloser(bytes.NewReader(entity.Data)), ttl, nil
@@ -64,8 +66,8 @@ func (layer *InMemoryCacheLayer) Set(key string, entry io.ReadCloser, ttl time.D
 		return err
 	}
 
-	layer.lock.Lock()
-	defer layer.lock.Unlock()
+	layer.entityStoreMutex.Lock()
+	defer layer.entityStoreMutex.Unlock()
 
 	availableRoom := (layer.MaxSize - layer.currentSize)
 	//If the entry is bigger than the max size we have to make room
@@ -83,15 +85,15 @@ func (layer *InMemoryCacheLayer) Set(key string, entry io.ReadCloser, ttl time.D
 }
 
 func (layer *InMemoryCacheLayer) Delete(key string) error {
-	layer.lock.Lock()
+	layer.entityStoreMutex.Lock()
 	layer.delete(key)
-	layer.lock.Unlock()
+	layer.entityStoreMutex.Unlock()
 	return nil
 }
 
 func (layer *InMemoryCacheLayer) Refresh(key string, ttl time.Duration) error {
-	layer.lock.Lock()
-	defer layer.lock.Unlock()
+	layer.entityStoreMutex.Lock()
+	defer layer.entityStoreMutex.Unlock()
 
 	if entity, found := layer.entityStore[key]; found {
 		entity.Expiration = time.Now().Add(ttl)
@@ -106,6 +108,7 @@ func (layer *InMemoryCacheLayer) Refresh(key string, ttl time.Duration) error {
 func (layer *InMemoryCacheLayer) replaceCache(neededSize int) error {
 
 	//Loop over all known stale keys and remove them until we have room or there are no more stale keys
+	layer.staleKeysMutex.Lock()
 	for key := range layer.staleKeys {
 		neededSize -= layer.delete(key)
 
@@ -113,9 +116,11 @@ func (layer *InMemoryCacheLayer) replaceCache(neededSize int) error {
 
 		//If we have enough space we return
 		if neededSize <= 0 {
+			layer.staleKeysMutex.Unlock()
 			return nil
 		}
 	}
+	layer.staleKeysMutex.Unlock()
 
 	//If we still need room and there are no stale keys start removing fresh entries
 	for key := range layer.entityStore {

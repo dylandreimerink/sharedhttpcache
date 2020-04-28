@@ -370,6 +370,7 @@ func startServer(ctx context.Context, errChan chan error, wg *sync.WaitGroup) er
 		httpServer := &http.Server{
 			Handler: http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 				cacheController.ServeHTTP(rw, req)
+				fmt.Printf("%s %s\n", req.Method, req.URL)
 			}),
 		}
 

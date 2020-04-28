@@ -150,7 +150,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 			//The value we will need to compare the cache entry ttl to
 			compareTTL := int64(0)
 
-			for _, directive := range SplitCacheControlHeader(req.Header.Get(CacheControlHeader)) {
+			for _, directive := range SplitCacheControlHeader(req.Header[CacheControlHeader]) {
 				if strings.HasPrefix(directive, MaxAgeDirective) {
 					//TODO check ofr quoted-string form
 					maxAgeString := strings.TrimPrefix(directive, MaxAgeDirective+"=")
@@ -485,7 +485,7 @@ func MayServeStaleResponse(cacheConfig *CacheConfig, response *http.Response) bo
 		return true
 	}
 
-	directives := SplitCacheControlHeader(response.Header.Get(CacheControlHeader))
+	directives := SplitCacheControlHeader(response.Header[CacheControlHeader])
 	for _, directive := range directives {
 
 		//If response contains a cache directive that disallowes stale responses section 4.2.4 of RFC7234
@@ -645,6 +645,15 @@ func WriteHTTPResponse(rw http.ResponseWriter, response *http.Response) error {
 }
 
 func getResponseAge(response *http.Response) int64 {
+
+	//First check for the existence of a Age header
+	if ageHeader := response.Header.Get(AgeHeader); ageHeader != "" {
+		age, err := strconv.ParseInt(ageHeader, 10, 0)
+		if err == nil {
+			return age
+		}
+	}
+
 	age := int64(-1)
 
 	dateString := response.Header.Get(DateHeader)

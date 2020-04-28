@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	AgeHeader          = "Age"
 	CacheControlHeader = "Cache-Control"
 	ExpiresHeader      = "Expires"
 	DateHeader         = "Date"
@@ -46,7 +47,7 @@ func ShouldStoreResponse(config *CacheConfig, resp *http.Response) bool {
 		return false
 	}
 
-	requestCacheControlDirectives := SplitCacheControlHeader(req.Header.Get(CacheControlHeader))
+	requestCacheControlDirectives := SplitCacheControlHeader(req.Header[CacheControlHeader])
 
 	//if the request contains the cache-control header and it contains no-store the response should not be cached
 	for _, directive := range requestCacheControlDirectives {
@@ -55,7 +56,7 @@ func ShouldStoreResponse(config *CacheConfig, resp *http.Response) bool {
 		}
 	}
 
-	responseCacheControlDirectives := SplitCacheControlHeader(resp.Header.Get(CacheControlHeader))
+	responseCacheControlDirectives := SplitCacheControlHeader(resp.Header[CacheControlHeader])
 
 	for _, directive := range responseCacheControlDirectives {
 		//if the response contains the cache-control header and it contains no-store the response should not be cached
@@ -99,6 +100,26 @@ func ShouldStoreResponse(config *CacheConfig, resp *http.Response) bool {
 		return false
 	}
 
+	for _, directive := range responseCacheControlDirectives {
+
+		//if the response header Cache-Control contains a s-maxage response directive (see Section 5.2.2.9 of RFC7234)
+		//  and the cache is shared (which it is)
+		//  the response is cacheable
+		if strings.HasPrefix(directive, SMaxAgeDirective) {
+			return true
+		}
+
+		//if the Cache-Control header contains max-age the response is cacheable (see Section 5.2.2.8 of RFC7234)
+		if strings.HasPrefix(directive, MaxAgeDirective) {
+			return true
+		}
+
+		//if the response contains a public response directive (see Section 5.2.2.5).
+		if directive == PublicDirective {
+			return true
+		}
+	}
+
 	//if the expires header is set (see Section 5.3 of RFC7234)
 	if resp.Header.Get(ExpiresHeader) != "" {
 
@@ -111,26 +132,6 @@ func ShouldStoreResponse(config *CacheConfig, resp *http.Response) bool {
 
 		//If the expires is in the future, the response is cacheable
 		if time.Until(expires) > 0 {
-			return true
-		}
-	}
-
-	for _, directive := range responseCacheControlDirectives {
-
-		//if the Cache-Control header contains max-age the response is cacheable (see Section 5.2.2.8 of RFC7234)
-		if strings.HasPrefix(directive, MaxAgeDirective) {
-			return true
-		}
-
-		//if the response header Cache-Control contains a s-maxage response directive (see Section 5.2.2.9 of RFC7234)
-		//  and the cache is shared (which it is)
-		//  the response is cacheable
-		if strings.HasPrefix(directive, SMaxAgeDirective) {
-			return true
-		}
-
-		//if the response contains a public response directive (see Section 5.2.2.5).
-		if directive == PublicDirective {
 			return true
 		}
 	}
@@ -162,9 +163,11 @@ func ShouldStoreResponse(config *CacheConfig, resp *http.Response) bool {
 // if the ttl is negative the response is already stale
 func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 
+	responseAge := getResponseAge(resp)
+
 	//The header value is comma separated, so split it on the comma.
 	// Lowercase the directive so string comparison is easier and trim the spaces from the directives
-	directives := SplitCacheControlHeader(resp.Header.Get(CacheControlHeader))
+	directives := SplitCacheControlHeader(resp.Header[CacheControlHeader])
 
 	//s-maxage has priority because this is a shared cache
 	for _, directive := range directives {
@@ -179,7 +182,8 @@ func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 			sMaxAge, err := strconv.ParseInt(sMaxAgeString, 10, 0)
 
 			if err == nil {
-				return time.Duration(sMaxAge) * time.Second
+				//The remaining TTL is the max age minus the age of the response
+				return time.Duration(sMaxAge-responseAge) * time.Second
 			}
 		}
 	}
@@ -195,7 +199,8 @@ func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 			maxAge, err := strconv.ParseInt(maxAgeString, 10, 0)
 
 			if err == nil {
-				return time.Duration(maxAge) * time.Second
+				//The remaining TTL is the max age minus the age of the response
+				return time.Duration(maxAge-responseAge) * time.Second
 			}
 		}
 	}
@@ -230,13 +235,13 @@ func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 //RequestOrResponseHasNoCache checks if a response or its request contains a no-cache directive in the Cache-Control header
 func RequestOrResponseHasNoCache(resp *http.Response) bool {
 
-	for _, directive := range SplitCacheControlHeader(resp.Header.Get(CacheControlHeader)) {
+	for _, directive := range SplitCacheControlHeader(resp.Header[CacheControlHeader]) {
 		if strings.TrimSpace(directive) == NoCacheDirective {
 			return true
 		}
 	}
 
-	for _, directive := range SplitCacheControlHeader(resp.Request.Header.Get(CacheControlHeader)) {
+	for _, directive := range SplitCacheControlHeader(resp.Request.Header[CacheControlHeader]) {
 		if strings.TrimSpace(directive) == NoCacheDirective {
 			return true
 		}
@@ -253,7 +258,7 @@ func RequestOrResponseHasNoCache(resp *http.Response) bool {
 //ResponseHasMustRevalidate checks if a response contains a must-revalidate or proxy-revalidate directive in the Cache-Control header
 func ResponseHasMustRevalidate(resp *http.Response) bool {
 
-	for _, directive := range SplitCacheControlHeader(resp.Header.Get(CacheControlHeader)) {
+	for _, directive := range SplitCacheControlHeader(resp.Header[CacheControlHeader]) {
 		if strings.TrimSpace(directive) == MustRevalidateDirective || strings.TrimSpace(directive) == ProxyRevalidateDirective {
 			return true
 		}
