@@ -208,7 +208,7 @@ func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 	//Get the date from the response, if not set or invalid make the date the current time
 	date := time.Now()
 	if dateString := resp.Header.Get(DateHeader); dateString != "" {
-		if parsedDate, err := http.ParseTime(dateString); err != nil {
+		if parsedDate, err := http.ParseTime(dateString); err == nil {
 			date = parsedDate
 		}
 	}
@@ -221,7 +221,7 @@ func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 			return -1
 		}
 
-		return expires.Sub(date)
+		return expires.Sub(date) - (time.Second * time.Duration(responseAge))
 	}
 
 	//Use default values instead of calculating heuristic freshness
