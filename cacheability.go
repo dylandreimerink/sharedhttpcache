@@ -236,7 +236,9 @@ func GetResponseTTL(config *CacheConfig, resp *http.Response) time.Duration {
 func RequestOrResponseHasNoCache(resp *http.Response) bool {
 
 	for _, directive := range SplitCacheControlHeader(resp.Header[CacheControlHeader]) {
-		if strings.TrimSpace(directive) == NoCacheDirective {
+		//Check for the plain and field-name form
+		//Section 5.2.2.2 of RFC 7234
+		if strings.TrimSpace(directive) == NoCacheDirective || strings.HasPrefix(directive, NoCacheDirective+"=") {
 			return true
 		}
 	}

@@ -203,9 +203,13 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 
 			}
 
-			if ttl > (time.Duration(compareTTL)*time.Second) && //If the response is older than the TTL it is stale
-				!RequestOrResponseHasNoCache(cachedResponse) && //If the request or response containse a no-cache we can't return a cached result
-				!ResponseHasMustRevalidate(cachedResponse) && //If the response contains a must-revalidate, we must always revalidate, can serve from cache
+			cachedResponseIsFresh := ttl > (time.Duration(compareTTL) * time.Second)
+			cachedResponseHasNoCache := RequestOrResponseHasNoCache(cachedResponse)
+			cachedResponseHasMustRevalidate := ResponseHasMustRevalidate(cachedResponse)
+
+			if cachedResponseIsFresh && //If the response is older than the TTL it is stale
+				!cachedResponseHasNoCache && //If the request or response contains a no-cache we can't return a cached result
+				!cachedResponseHasMustRevalidate && //If the response contains a must-revalidate, we must always revalidate, can serve from cache
 				clientWantsResponse { //If the client wants a response which is fresher than what we have, we can't serve the cached response
 
 				err = WriteCachedResponse(resp, cachedResponse, ttl)
@@ -242,6 +246,18 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 
 					//Check if we are allowed the serve the stale content
 					if MayServeStaleResponse(cacheConfig, cachedResponse) {
+
+						//If the response contains a no-cache directive with a field-list strip the headers from the response
+						//Section 5.2.2.2 of RFC 7234
+						for _, directive := range SplitCacheControlHeader(response.Header[CacheControlHeader]) {
+							if strings.HasPrefix(directive, NoCacheDirective+"=") {
+								fieldList := strings.TrimPrefix(directive, NoCacheDirective+"=")
+								fieldList = strings.Trim(fieldList, "\"")
+								for _, fieldName := range strings.Split(fieldList, ",") {
+									cachedResponse.Header.Del(strings.TrimSpace(fieldName))
+								}
+							}
+						}
 
 						err := WriteCachedResponse(resp, cachedResponse, ttl)
 						if err != nil {
@@ -308,6 +324,42 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 
 				//If no revalidation can be done or precondition failed
 			} else {
+				// A validation request could not be made for the stored response
+				// Most likely because there is no Last-Modified or Etag header in the response
+
+				//In the case the only reason to revalidate was to validate fields in the no-cache CC directive
+				if cachedResponseIsFresh && //If the response is older than the TTL it is stale
+					!cachedResponseHasMustRevalidate && //If the response contains a must-revalidate, we must always revalidate, can serve from cache
+					clientWantsResponse { //If the client wants a response which is fresher than what we have, we can't serve the cached response
+
+					noCacheFields := false
+
+					//If the response contains a no-cache directive with a field-list strip the headers from the response
+					//Section 5.2.2.2 of RFC 7234
+					for _, directive := range SplitCacheControlHeader(cachedResponse.Header[CacheControlHeader]) {
+						if strings.HasPrefix(directive, NoCacheDirective+"=") {
+							noCacheFields = true
+
+							fieldList := strings.TrimPrefix(directive, NoCacheDirective+"=")
+							fieldList = strings.Trim(fieldList, "\"")
+							for _, fieldName := range strings.Split(fieldList, ",") {
+								cachedResponse.Header.Del(strings.TrimSpace(fieldName))
+							}
+						}
+					}
+
+					//If the Cache-Control header contained a no-cache directive with a field set
+					// We can may return the cached response without the headers in the fieldset
+					if noCacheFields {
+						err := WriteCachedResponse(resp, cachedResponse, ttl)
+						if err != nil {
+							controller.Logger.WithError(err).Error("Error while writing un-revalidated response to client")
+						}
+
+						return
+					}
+				}
+
 				//TODO invalidate cache key
 			}
 		}
