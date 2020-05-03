@@ -256,7 +256,7 @@ var requiredTests = []string{
 	"vary-syntax-star-star",
 }
 
-//This is a small tool that checks the contents of a intergration test output file against a list of tests which should be successfull
+//This is a small tool that checks the contents of a integration test output file against a list of tests which should be successful
 func main() {
 
 	if len(os.Args) != 2 {
@@ -286,7 +286,7 @@ func main() {
 			failed = true
 		}
 
-		if valBool, ok := value.(bool); !ok || valBool == false {
+		if valBool, ok := value.(bool); !ok || !valBool {
 			fmt.Fprintf(os.Stderr, "Required test '%s' failed\n", name)
 			failed = true
 		}

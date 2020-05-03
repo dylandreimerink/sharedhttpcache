@@ -2,8 +2,8 @@
 
 intergrationtest: ## Executes the intergration tests. The intergration test starts a http client, server and the shared cache and tests the full function of the cache
 	# Cleanup old test files
-	rm test_output/http_cache_test_coverage.out
-	rm test_output/httpcachetest
+	rm -f test_output/http_cache_test_coverage.out
+	rm -f test_output/httpcachetest
 	# Clone the cache-tests if the path doesn't alrady exist
 	ls test_output/cache-tests &> /dev/null || git clone https://github.com/http-tests/cache-tests.git test_output/cache-tests
 	# Check out a known good commit
@@ -18,7 +18,7 @@ intergrationtest: ## Executes the intergration tests. The intergration test star
 	npm run --prefix test_output/cache-tests --silent cli --base=http://localhost:8081 > test_output/cache-tests/results/sharedhttpcache.json || kill $$CACHE_SERVER_PID || true && kill $$CACHE_ORIGIN_PID || true; \
 	kill "$$CACHE_SERVER_PID" || true; \
 	kill "$$CACHE_ORIGIN_PID" || true
-	# Make sure the intergration tests were successfull
+	# Make sure the intergration tests were successful
 	go run cmd/cachetestverifier/main.go test_output/cache-tests/results/sharedhttpcache.json
 	
 

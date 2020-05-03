@@ -229,7 +229,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 			if revalidationRequest != nil {
 
 				//Create a forward context which will stop the connection to the backend if the connection from the clients stops
-				ctx, cancel := createForwardContext(resp, req)
+				ctx, cancel := context.WithCancel(req.Context())
 				if cancel != nil {
 					defer cancel()
 				}
@@ -240,9 +240,9 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 				if err != nil || validationResponse.StatusCode > 500 {
 					//Can't reach origin server or it returned an error
 
-					if cacheConfig.HTTPWarnings {
-						//TODO add warning to stored response
-					}
+					// if cacheConfig.HTTPWarnings {
+					//TODO add warning to stored response
+					// }
 
 					//Check if we are allowed the serve the stale content
 					if MayServeStaleResponse(cacheConfig, cachedResponse) {
@@ -300,9 +300,9 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 				//If the response is not modified we can refresh the response
 				if validationResponse.StatusCode == http.StatusNotModified {
 
-					if cacheConfig.HTTPWarnings {
-						//TODO remove warnings from stored response
-					}
+					// if cacheConfig.HTTPWarnings {
+					//TODO remove warnings from stored response
+					// }
 
 					//Overwrite cached headers with the headers from the validation response
 					for header, value := range validationResponse.Header {
@@ -368,7 +368,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 	//If response has not been set by the revalidation process
 	if response == nil {
 		//Create a forward context which will stop the connection to the backend if the connection from the clients stops
-		ctx, cancel := createForwardContext(resp, req)
+		ctx, cancel := context.WithCancel(req.Context())
 		if cancel != nil {
 			defer cancel()
 		}
@@ -437,7 +437,10 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 							if ttl >= 0 {
 
 								//Set the ttl negative, so it will no longer be fresh
-								controller.RefreshCacheEntry(primaryKey+secondaryKey, time.Duration(-1))
+								err = controller.RefreshCacheEntry(primaryKey+secondaryKey, time.Duration(-1))
+								if err != nil {
+									controller.Logger.WithError(err).WithField("cache-key", primaryKey+secondaryKey).Error("Error while attempting to set ttl of cache key to -1")
+								}
 							}
 						}
 					}
@@ -518,26 +521,6 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 
 		panic(err)
 	}
-}
-
-//createForwardContext creates a context which should be used when forwarding a request to a backend
-func createForwardContext(resp http.ResponseWriter, req *http.Request) (context.Context, context.CancelFunc) {
-	ctx := req.Context()
-	var cancel context.CancelFunc
-
-	if cn, ok := resp.(http.CloseNotifier); ok {
-		ctx, cancel = context.WithCancel(ctx)
-		notifyChan := cn.CloseNotify()
-		go func() {
-			select {
-			case <-notifyChan:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
-	}
-
-	return ctx, cancel
 }
 
 //StoreResponseInCache stores the given response in the cache under the cacheKey

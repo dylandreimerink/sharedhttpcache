@@ -26,13 +26,13 @@ import (
 
 //Config is the structure for the configuration file
 type Config struct {
-	//CacheConfig is the configurate that determins how the caching part of the caching server should behave
+	//CacheConfig is the configure that determines how the caching part of the caching server should behave
 	CacheConfig CacheConfig `mapstructure:"cache_config"`
 
-	//ListenConfig is the configuration that determins how the http server part of the caching server should behave
+	//ListenConfig is the configuration that determines how the http server part of the caching server should behave
 	ListenConfig ListenConfig `mapstructure:"listen_config"`
 
-	//ForwardConfig is the configuration that determins how the http client part of the caching server should behave
+	//ForwardConfig is the configuration that determines how the http client part of the caching server should behave
 	ForwardConfig ForwardConfig `mapstructure:"forward_config"`
 }
 
