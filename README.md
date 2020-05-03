@@ -22,6 +22,10 @@ TODO make command line usage section for the standalone cache server
 
 For library examples please go the the [godoc page](https://godoc.org/github.com/dylandreimerink/sharedhttpcache)
 
+## Validation
+
+To validate the cache a testing harness like https://github.com/http-tests/cache-tests can be used.
+
 ## TODO
 
 - Make fully RFC7234 compliant

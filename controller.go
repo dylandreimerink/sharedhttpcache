@@ -698,15 +698,7 @@ func WriteHTTPResponse(rw http.ResponseWriter, response *http.Response) error {
 
 func getResponseAge(response *http.Response) int64 {
 
-	//First check for the existence of a Age header
-	if ageHeader := response.Header.Get(AgeHeader); ageHeader != "" {
-		age, err := strconv.ParseInt(ageHeader, 10, 0)
-		if err == nil {
-			return age
-		}
-	}
-
-	age := int64(-1)
+	apparentAge := int64(0)
 
 	dateString := response.Header.Get(DateHeader)
 	if dateString != "" {
@@ -715,16 +707,25 @@ func getResponseAge(response *http.Response) int64 {
 
 			//Get the second difference between date and now
 			// this is the apparent_age method described in section 4.2.3 of RFC 7234
-			age = int64(time.Since(date).Seconds())
+			apparentAge = int64(time.Since(date).Seconds())
+			if apparentAge < 0 {
+				apparentAge = 0
+			}
+
 		}
 	}
 
-	//The age of a response can't be in the future
-	if age < -1 {
-		age = -1
+	if ageHeader := response.Header.Get(AgeHeader); ageHeader != "" {
+		ageValue, err := strconv.ParseInt(ageHeader, 10, 0)
+		if err == nil {
+
+			//TODO correct age by adding response_delay
+
+			return ageValue + apparentAge
+		}
 	}
 
-	return age
+	return apparentAge
 }
 
 //WriteCachedResponse writes a cached response to a response writer
@@ -735,7 +736,7 @@ func WriteCachedResponse(rw http.ResponseWriter, cachedResponse *http.Response, 
 
 	//If the age is positive we add the header. Negative ages are not allowed
 	if age >= 0 {
-		cachedResponse.Header.Set("Age", strconv.FormatInt(age, 10))
+		cachedResponse.Header.Set(AgeHeader, strconv.FormatInt(age, 10))
 	}
 
 	return WriteHTTPResponse(rw, cachedResponse)
