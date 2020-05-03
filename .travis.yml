@@ -5,11 +5,11 @@ sudo: false
 go:
   - 1.13.x
 
-node_js:
-  - 10
-
 before_install:
   - curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/v1.24.0/install.sh | sh -s -- -b $GOPATH/bin v1.24.0
+
+install:
+  - nvm use 10
 
 script:
   - golangci-lint run -c .golangci.yml
