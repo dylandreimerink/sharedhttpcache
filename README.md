@@ -10,6 +10,7 @@ The goal of this project is to make a RFC 7234 compliant shared caching server i
 
 ## Features
 
+- Fully RFC7234 compliant (excluding optional features)
 - Flexible configuration
 - Multi layer system
 - Customizable logging
@@ -28,7 +29,6 @@ To validate the cache a testing harness like https://github.com/http-tests/cache
 
 ## TODO
 
-- Make fully RFC7234 compliant
 - Add standalone cache server command for use as executable
 - Adding tests, both unit and integration
 - Store partial responses

@@ -387,6 +387,65 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 			return
 		}
 
+		//If a request method is unsafe, invalidate cache, RFC 7234 section 4.4
+		if !IsMethodSafe(cacheConfig, req.Method) {
+
+			//Only invalidate if the response is a 'non-error response'
+			if response.StatusCode >= 200 && response.StatusCode < 400 {
+
+				urls := []string{GetEffectiveURI(req, forwardConfig)}
+
+				locationVal := response.Header.Get("Location")
+				if location, err := url.Parse(locationVal); err == nil {
+					locationPseudoRequest := &http.Request{
+						URL:  location,
+						TLS:  req.TLS,
+						Host: req.Host,
+					}
+
+					urls = append(urls, GetEffectiveURI(locationPseudoRequest, forwardConfig))
+				}
+
+				contentLocationVal := response.Header.Get("Content-Location")
+				if contentLocation, err := url.Parse(contentLocationVal); err == nil {
+					contentLocationPseudoRequest := &http.Request{
+						URL:  contentLocation,
+						TLS:  req.TLS,
+						Host: req.Host,
+					}
+
+					urls = append(urls, GetEffectiveURI(contentLocationPseudoRequest, forwardConfig))
+				}
+
+				for _, url := range urls {
+					for _, method := range cacheConfig.SafeMethods {
+						//TODO use a method which also accounts for custom cache keys
+						primaryKey := method + url
+
+						secondaryKeys, _, err := controller.FindSecondaryKeysInCache(primaryKey)
+						if err != nil {
+							controller.Logger.WithError(err).WithField("cache-key", primaryKey).Error("Error while attempting to find secondary cache key in cache")
+						}
+
+						if len(secondaryKeys) == 0 {
+							secondaryKeys = []string{""}
+						}
+
+						for _, secondaryKey := range secondaryKeys {
+
+							_, ttl, _ := controller.FindResponseInCache(primaryKey + secondaryKey)
+							if ttl >= 0 {
+
+								//Set the ttl negative, so it will no longer be fresh
+								controller.RefreshCacheEntry(primaryKey+secondaryKey, time.Duration(-1))
+							}
+						}
+					}
+				}
+
+			}
+		}
+
 		//TODO Deal with 101 Switching Protocols responses: (WebSocket, h2c, etc) https://golang.org/src/net/http/httputil/reverseproxy.go?s=3318:3379#L256
 	}
 
@@ -658,9 +717,12 @@ func ProxyToOrigin(forwardContext context.Context, transport http.RoundTripper, 
 		outreq.URL.Scheme = "http"
 	}
 
+	//TODO figure out of the forward host or the original host should be used
 	//Change the host in the url and request body
-	outreq.URL.Host = forwardConfig.Host
-	outreq.Host = forwardConfig.Host
+	// outreq.URL.Host = forwardConfig.Host
+	// outreq.Host = forwardConfig.Host
+	outreq.URL.Host = req.Host
+	outreq.Host = req.Host
 
 	//Forward request to origin server
 	response, err := transport.RoundTrip(outreq)
