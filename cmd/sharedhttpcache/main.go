@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/dylandreimerink/sharedhttpcache/layer"
@@ -225,7 +226,7 @@ func main() {
 	// that SIGINT and SIGTERM signals cause the services to stop gracefully.
 	go func() {
 		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 		errChan <- fmt.Errorf("%s", <-c)
 	}()
 
@@ -370,7 +371,7 @@ func startServer(ctx context.Context, errChan chan error, wg *sync.WaitGroup) er
 		httpServer := &http.Server{
 			Handler: http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 				cacheController.ServeHTTP(rw, req)
-				fmt.Printf("%s %s\n", req.Method, req.URL)
+				// fmt.Printf("%s %s\n", req.Method, req.URL)
 			}),
 		}
 

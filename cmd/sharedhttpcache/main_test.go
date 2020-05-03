@@ -1,4 +1,4 @@
-// +build intergrationtest
+// +build httpcachetest
 
 //Credits to Aleksa Sarai, Source: https://www.cyphar.com/blog/post/20170412-golang-integration-coverage
 

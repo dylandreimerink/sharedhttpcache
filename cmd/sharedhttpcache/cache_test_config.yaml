@@ -1,0 +1,10 @@
+listen_config:
+  address: localhost:8081
+  
+forward_config:
+  forward_proxy_mode: false
+  per_host:
+  - host: "localhost"
+    origin: "localhost:8000"
+    origin_ip: "127.0.0.1"
+    tls: false

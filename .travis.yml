@@ -6,6 +6,5 @@ go:
 script:
   - go test ./... -covermode count -coverprofile coverage.txt
   - bash <(curl -s https://codecov.io/bash) -cF unittests
-  - go test -tags intergrationtest -covermode count -coverpkg github.com/dylandreimerink/sharedhttpcache,github.com/dylandreimerink/sharedhttpcache/layer -c -o test_output/intergrationtests github.com/dylandreimerink/sharedhttpcache/cmd/intergrationtests
-  - ./test_output/intergrationtests -test.coverprofile test_output/intergration_test_coverage.out __DEVEL--i-heard-you-like-tests
-  - bash <(curl -s https://codecov.io/bash) -cF integration -f test_output/intergration_test_coverage.out
+  - make intergrationtest
+  - bash <(curl -s https://codecov.io/bash) -cF integration -f test_output/http_cache_test_coverage.out

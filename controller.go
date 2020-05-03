@@ -717,10 +717,7 @@ func ProxyToOrigin(forwardContext context.Context, transport http.RoundTripper, 
 		outreq.URL.Scheme = "http"
 	}
 
-	//TODO figure out of the forward host or the original host should be used
-	//Change the host in the url and request body
-	// outreq.URL.Host = forwardConfig.Host
-	// outreq.Host = forwardConfig.Host
+	//Forward the original hostname for which the request was intended
 	outreq.URL.Host = req.Host
 	outreq.Host = req.Host
 
