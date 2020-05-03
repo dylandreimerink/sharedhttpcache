@@ -5,7 +5,7 @@ intergrationtest: ## Executes the intergration tests. The intergration test star
 	rm -f test_output/http_cache_test_coverage.out
 	rm -f test_output/httpcachetest
 	# Clone the cache-tests if the path doesn't alrady exist
-	ls test_output/cache-tests &> /dev/null || git clone https://github.com/http-tests/cache-tests.git test_output/cache-tests
+	if [ ! -d "test_output/cache-tests" ]; then git clone https://github.com/http-tests/cache-tests.git test_output/cache-tests; fi
 	# Check out a known good commit
 	git -C test_output/cache-tests checkout -f eb4cac0bdd681a1783b194561ae333f40156a299
 	# Install dependencies
