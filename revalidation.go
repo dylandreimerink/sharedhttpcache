@@ -7,9 +7,9 @@ import (
 
 //TODO implement bulk revalidation with If-None-Match precondition
 
-//MakeRevalidationRequest makes a revalidation request based on the current request and the stored response to revalidate
+//makeRevalidationRequest makes a revalidation request based on the current request and the stored response to revalidate
 // If a conditional request can't be created the response will be nil in which case the cached response should be considered invalidated
-func MakeRevalidationRequest(request *http.Request, response *http.Response) *http.Request {
+func makeRevalidationRequest(request *http.Request, response *http.Response) *http.Request {
 
 	//We use the request we got from the http client.
 	//However we can't modify it because we don't know how it's used outside this function

@@ -2,14 +2,11 @@ package sharedhttpcache
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"math"
-	"net"
 	"net/http"
-	"net/textproto"
 	"net/url"
 	"sort"
 	"strconv"
@@ -108,25 +105,166 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 
 	//TODO handle validation request from client, section 4.3.2 of RFC 7234
 
-	var response *http.Response
+	primaryCacheKey := getPrimaryCacheKey(cacheConfig, forwardConfig, req)
 
-	primaryCacheKey := GetPrimaryCacheKey(cacheConfig, forwardConfig, req)
+	response, stop := controller.getCachedResponse(cacheConfig, forwardConfig, transport, resp, req, primaryCacheKey)
+	if stop {
+		return
+	}
+
+	// If response has not been set from the cache or by the revalidation process
+	// Proxy the request to the origin server
+	if response == nil {
+		response, stop = controller.proxyRequestToOrigin(cacheConfig, forwardConfig, transport, resp, req, response)
+		if stop {
+			return
+		}
+	}
+
+	//If the response has no date the proxy must set it as per section 7.1.1.2 of RFC7231
+	if response.Header.Get(DateHeader) == "" {
+		response.Header.Set(DateHeader, time.Now().Format(http.TimeFormat))
+	}
+
+	response = controller.storeResponse(cacheConfig, req, response, primaryCacheKey)
+
+	//TODO add warnings https://tools.ietf.org/html/rfc7234#section-5.5
+
+	err = writeHTTPResponse(resp, response)
+	if err != nil {
+		controller.Logger.WithError(err).Error("Error while writing response to http client")
+
+		panic(err)
+	}
+}
+
+func (controller *CacheController) proxyRequestToOrigin(
+	cacheConfig *CacheConfig,
+	forwardConfig *ForwardConfig,
+	transport http.RoundTripper,
+	resp http.ResponseWriter,
+	req *http.Request,
+	response *http.Response,
+) (
+	*http.Response,
+	bool,
+) {
+
+	//Create a forward context which will stop the connection to the backend if the connection from the clients stops
+	ctx, cancel := context.WithCancel(req.Context())
+	if cancel != nil {
+		defer cancel()
+	}
+
+	var err error
+	response, err = proxyToOrigin(ctx, transport, forwardConfig, req)
+	if err != nil {
+
+		//Log as a warning since errors here are exprected when a origin server is down
+		controller.Logger.WithError(err).WithFields(logrus.Fields{
+			"transport":      transport,
+			"forward-config": forwardConfig,
+			"request":        req,
+		}).Warning("Error while proxying request to origin server")
+
+		http.Error(resp, "Unable to contact origin server", http.StatusBadGateway)
+
+		return response, true
+	}
+
+	//If a request method is unsafe, invalidate cache, RFC 7234 section 4.4
+	if !isMethodSafe(cacheConfig, req.Method) {
+
+		//Only invalidate if the response is a 'non-error response'
+		if response.StatusCode >= 200 && response.StatusCode < 400 {
+
+			urls := []string{getEffectiveURI(req, forwardConfig)}
+
+			locationVal := response.Header.Get("Location")
+			if location, err := url.Parse(locationVal); err == nil {
+				locationPseudoRequest := &http.Request{
+					URL:  location,
+					TLS:  req.TLS,
+					Host: req.Host,
+				}
+
+				urls = append(urls, getEffectiveURI(locationPseudoRequest, forwardConfig))
+			}
+
+			contentLocationVal := response.Header.Get("Content-Location")
+			if contentLocation, err := url.Parse(contentLocationVal); err == nil {
+				contentLocationPseudoRequest := &http.Request{
+					URL:  contentLocation,
+					TLS:  req.TLS,
+					Host: req.Host,
+				}
+
+				urls = append(urls, getEffectiveURI(contentLocationPseudoRequest, forwardConfig))
+			}
+
+			for _, url := range urls {
+				for _, method := range cacheConfig.SafeMethods {
+					//TODO use a method which also accounts for custom cache keys
+					primaryKey := method + url
+
+					secondaryKeys, _, err := controller.findSecondaryKeysInCache(primaryKey)
+					if err != nil {
+						controller.Logger.WithError(err).WithField("cache-key", primaryKey).Error("Error while attempting to find secondary cache key in cache")
+					}
+
+					if len(secondaryKeys) == 0 {
+						secondaryKeys = []string{""}
+					}
+
+					for _, secondaryKey := range secondaryKeys {
+
+						_, ttl, _ := controller.findResponseInCache(primaryKey + secondaryKey)
+						if ttl >= 0 {
+
+							//Set the ttl negative, so it will no longer be fresh
+							err = controller.refreshCacheEntry(primaryKey+secondaryKey, time.Duration(-1))
+							if err != nil {
+								controller.Logger.WithError(err).WithField("cache-key", primaryKey+secondaryKey).Error("Error while attempting to set ttl of cache key to -1")
+							}
+						}
+					}
+				}
+			}
+
+		}
+	}
+
+	//TODO Deal with 101 Switching Protocols responses: (WebSocket, h2c, etc) https://golang.org/src/net/http/httputil/reverseproxy.go?s=3318:3379#L256
+
+	return response, false
+}
+
+func (controller *CacheController) getCachedResponse(
+	cacheConfig *CacheConfig,
+	forwardConfig *ForwardConfig,
+	transport http.RoundTripper,
+	resp http.ResponseWriter,
+	req *http.Request,
+	primaryCacheKey string,
+) (*http.Response, bool) {
+
+	var response *http.Response
 
 	//Optimization: only if the method is safe and cacheable will it be in the cache
 	// if if one of the two is false we can save the cache loopup and just forward the request
-	if IsMethodSafe(cacheConfig, req.Method) && IsMethodCacheable(cacheConfig, req.Method) {
+	if isMethodSafe(cacheConfig, req.Method) && isMethodCacheable(cacheConfig, req.Method) {
 
-		secondaryKeys, _, err := controller.FindSecondaryKeysInCache(primaryCacheKey)
+		secondaryKeys, _, err := controller.findSecondaryKeysInCache(primaryCacheKey)
 		if err != nil {
 			controller.Logger.WithError(err).WithField("cache-key", primaryCacheKey).Error("Error while attempting to find secondary cache key in cache")
 		}
 
-		secondaryCacheKey := GetSecondaryCacheKey(secondaryKeys, req)
+		secondaryCacheKey := getSecondaryCacheKey(secondaryKeys, req)
 
 		//The full cacheKey is the primary cache key plus the secondary cache key
 		cacheKey := primaryCacheKey + secondaryCacheKey
 
-		cachedResponse, ttl, err := controller.FindResponseInCache(cacheKey)
+		cachedResponse, ttl, err := controller.findResponseInCache(cacheKey)
 		if err != nil {
 			//TODO make erroring optional, if the cache fails we may just want to forward the request instead of erroring
 
@@ -134,7 +272,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 
 			http.Error(resp, "Error while attempting to find cached response", http.StatusInternalServerError)
 
-			return
+			return response, true
 		}
 
 		//If there is a cached response
@@ -150,7 +288,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 			//The value we will need to compare the cache entry ttl to
 			compareTTL := int64(0)
 
-			for _, directive := range SplitCacheControlHeader(req.Header[CacheControlHeader]) {
+			for _, directive := range splitCacheControlHeader(req.Header[CacheControlHeader]) {
 				if strings.HasPrefix(directive, MaxAgeDirective) {
 					//TODO check ofr quoted-string form
 					maxAgeString := strings.TrimPrefix(directive, MaxAgeDirective+"=")
@@ -204,26 +342,26 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 			}
 
 			cachedResponseIsFresh := ttl > (time.Duration(compareTTL) * time.Second)
-			cachedResponseHasNoCache := RequestOrResponseHasNoCache(cachedResponse)
-			cachedResponseHasMustRevalidate := ResponseHasMustRevalidate(cachedResponse)
+			cachedResponseHasNoCache := requestOrResponseHasNoCache(cachedResponse)
+			cachedresponseHasMustRevalidate := responseHasMustRevalidate(cachedResponse)
 
 			if cachedResponseIsFresh && //If the response is older than the TTL it is stale
 				!cachedResponseHasNoCache && //If the request or response contains a no-cache we can't return a cached result
-				!cachedResponseHasMustRevalidate && //If the response contains a must-revalidate, we must always revalidate, can serve from cache
+				!cachedresponseHasMustRevalidate && //If the response contains a must-revalidate, we must always revalidate, can serve from cache
 				clientWantsResponse { //If the client wants a response which is fresher than what we have, we can't serve the cached response
 
-				err = WriteCachedResponse(resp, cachedResponse, ttl)
+				err = writeCachedResponse(resp, cachedResponse, ttl)
 				if err != nil {
 					controller.Logger.WithError(err).Error("Error while writing cached response to http client")
 					panic(err)
 				}
 
-				return
+				return response, true
 			}
 
 			//response is stale
 
-			revalidationRequest := MakeRevalidationRequest(req, cachedResponse)
+			revalidationRequest := makeRevalidationRequest(req, cachedResponse)
 
 			//If no revalidation request can be made the cached response can't be used
 			if revalidationRequest != nil {
@@ -234,7 +372,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 					defer cancel()
 				}
 
-				validationResponse, err := ProxyToOrigin(ctx, transport, forwardConfig, revalidationRequest)
+				validationResponse, err := proxyToOrigin(ctx, transport, forwardConfig, revalidationRequest)
 
 				//If the origin server can't be reached or a error is returned
 				if err != nil || validationResponse.StatusCode > 500 {
@@ -245,11 +383,11 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 					// }
 
 					//Check if we are allowed the serve the stale content
-					if MayServeStaleResponse(cacheConfig, cachedResponse) {
+					if mayServeStaleResponse(cacheConfig, cachedResponse) {
 
 						//If the response contains a no-cache directive with a field-list strip the headers from the response
 						//Section 5.2.2.2 of RFC 7234
-						for _, directive := range SplitCacheControlHeader(response.Header[CacheControlHeader]) {
+						for _, directive := range splitCacheControlHeader(response.Header[CacheControlHeader]) {
 							if strings.HasPrefix(directive, NoCacheDirective+"=") {
 								fieldList := strings.TrimPrefix(directive, NoCacheDirective+"=")
 								fieldList = strings.Trim(fieldList, "\"")
@@ -259,7 +397,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 							}
 						}
 
-						err := WriteCachedResponse(resp, cachedResponse, ttl)
+						err := writeCachedResponse(resp, cachedResponse, ttl)
 						if err != nil {
 							controller.Logger.WithError(err).Error("Error while writing stale response to client")
 						}
@@ -287,14 +425,14 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 						} else {
 							//If we reached this block it means we were able to contact the origin but it returned a 5xx code and are not allowed to serve a stale response
 							//So we have to send the error to the client as per section 4.3.3 of RFC7234
-							err := WriteHTTPResponse(resp, validationResponse)
+							err := writeHTTPResponse(resp, validationResponse)
 							if err != nil {
 								controller.Logger.WithError(err).Error("Error while writing validation response to client")
 							}
 						}
 					}
 
-					return
+					return response, true
 				}
 
 				//If the response is not modified we can refresh the response
@@ -329,14 +467,14 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 
 				//In the case the only reason to revalidate was to validate fields in the no-cache CC directive
 				if cachedResponseIsFresh && //If the response is older than the TTL it is stale
-					!cachedResponseHasMustRevalidate && //If the response contains a must-revalidate, we must always revalidate, can serve from cache
+					!cachedresponseHasMustRevalidate && //If the response contains a must-revalidate, we must always revalidate, can serve from cache
 					clientWantsResponse { //If the client wants a response which is fresher than what we have, we can't serve the cached response
 
 					noCacheFields := false
 
 					//If the response contains a no-cache directive with a field-list strip the headers from the response
 					//Section 5.2.2.2 of RFC 7234
-					for _, directive := range SplitCacheControlHeader(cachedResponse.Header[CacheControlHeader]) {
+					for _, directive := range splitCacheControlHeader(cachedResponse.Header[CacheControlHeader]) {
 						if strings.HasPrefix(directive, NoCacheDirective+"=") {
 							noCacheFields = true
 
@@ -351,12 +489,12 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 					//If the Cache-Control header contained a no-cache directive with a field set
 					// We can may return the cached response without the headers in the fieldset
 					if noCacheFields {
-						err := WriteCachedResponse(resp, cachedResponse, ttl)
+						err := writeCachedResponse(resp, cachedResponse, ttl)
 						if err != nil {
 							controller.Logger.WithError(err).Error("Error while writing un-revalidated response to client")
 						}
 
-						return
+						return response, true
 					}
 				}
 
@@ -365,105 +503,17 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 		}
 	}
 
-	//If response has not been set by the revalidation process
-	if response == nil {
-		//Create a forward context which will stop the connection to the backend if the connection from the clients stops
-		ctx, cancel := context.WithCancel(req.Context())
-		if cancel != nil {
-			defer cancel()
-		}
+	return response, false
+}
 
-		response, err = ProxyToOrigin(ctx, transport, forwardConfig, req)
-		if err != nil {
-
-			//Log as a warning since errors here are exprected when a origin server is down
-			controller.Logger.WithError(err).WithFields(logrus.Fields{
-				"transport":      transport,
-				"forward-config": forwardConfig,
-				"request":        req,
-			}).Warning("Error while proxying request to origin server")
-
-			http.Error(resp, "Unable to contact origin server", http.StatusBadGateway)
-			return
-		}
-
-		//If a request method is unsafe, invalidate cache, RFC 7234 section 4.4
-		if !IsMethodSafe(cacheConfig, req.Method) {
-
-			//Only invalidate if the response is a 'non-error response'
-			if response.StatusCode >= 200 && response.StatusCode < 400 {
-
-				urls := []string{GetEffectiveURI(req, forwardConfig)}
-
-				locationVal := response.Header.Get("Location")
-				if location, err := url.Parse(locationVal); err == nil {
-					locationPseudoRequest := &http.Request{
-						URL:  location,
-						TLS:  req.TLS,
-						Host: req.Host,
-					}
-
-					urls = append(urls, GetEffectiveURI(locationPseudoRequest, forwardConfig))
-				}
-
-				contentLocationVal := response.Header.Get("Content-Location")
-				if contentLocation, err := url.Parse(contentLocationVal); err == nil {
-					contentLocationPseudoRequest := &http.Request{
-						URL:  contentLocation,
-						TLS:  req.TLS,
-						Host: req.Host,
-					}
-
-					urls = append(urls, GetEffectiveURI(contentLocationPseudoRequest, forwardConfig))
-				}
-
-				for _, url := range urls {
-					for _, method := range cacheConfig.SafeMethods {
-						//TODO use a method which also accounts for custom cache keys
-						primaryKey := method + url
-
-						secondaryKeys, _, err := controller.FindSecondaryKeysInCache(primaryKey)
-						if err != nil {
-							controller.Logger.WithError(err).WithField("cache-key", primaryKey).Error("Error while attempting to find secondary cache key in cache")
-						}
-
-						if len(secondaryKeys) == 0 {
-							secondaryKeys = []string{""}
-						}
-
-						for _, secondaryKey := range secondaryKeys {
-
-							_, ttl, _ := controller.FindResponseInCache(primaryKey + secondaryKey)
-							if ttl >= 0 {
-
-								//Set the ttl negative, so it will no longer be fresh
-								err = controller.RefreshCacheEntry(primaryKey+secondaryKey, time.Duration(-1))
-								if err != nil {
-									controller.Logger.WithError(err).WithField("cache-key", primaryKey+secondaryKey).Error("Error while attempting to set ttl of cache key to -1")
-								}
-							}
-						}
-					}
-				}
-
-			}
-		}
-
-		//TODO Deal with 101 Switching Protocols responses: (WebSocket, h2c, etc) https://golang.org/src/net/http/httputil/reverseproxy.go?s=3318:3379#L256
-	}
-
-	//If the response has no date the proxy must set it as per section 7.1.1.2 of RFC7231
-	if response.Header.Get(DateHeader) == "" {
-		response.Header.Set(DateHeader, time.Now().Format(http.TimeFormat))
-	}
-
-	//TODO invalidate cache entries, unsafe methods can invalidate other cache entries
+//storeResponse stores the response if it should be stored
+func (controller *CacheController) storeResponse(cacheConfig *CacheConfig, req *http.Request, response *http.Response, primaryCacheKey string) *http.Response {
 
 	//If the response is cacheable
-	if ShouldStoreResponse(cacheConfig, response) {
+	if shouldStoreResponse(cacheConfig, response) {
 
 		//Get ttl and check if the response is not considered stale on arrival
-		if ttl := GetResponseTTL(cacheConfig, response); ttl > 0 {
+		if ttl := getResponseTTL(cacheConfig, response); ttl > 0 {
 
 			//Get the secondary key fields from the response (if any exist)
 			secondaryKeyFields := []string{}
@@ -475,7 +525,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 			}
 
 			//Get the secondaryCacheKey
-			secondaryCacheKey := GetSecondaryCacheKey(secondaryKeyFields, req)
+			secondaryCacheKey := getSecondaryCacheKey(secondaryKeyFields, req)
 
 			//Append the two to get the full cache key
 			cacheKey := primaryCacheKey + secondaryCacheKey
@@ -483,7 +533,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 			//Store the latest set of secondary keys we find
 			//this can cause issues if the origin returns a different value in Vary for different primary cache keys
 			//TODO look into this
-			err := controller.StoreSecondaryKeysInCache(primaryCacheKey, secondaryKeyFields, ttl)
+			err := controller.storeSecondaryKeysInCache(primaryCacheKey, secondaryKeyFields, ttl)
 			if err != nil {
 
 				controller.Logger.WithError(err).WithFields(logrus.Fields{
@@ -495,7 +545,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 				panic(err)
 			}
 
-			err = controller.StoreResponseInCache(cacheKey, response, ttl)
+			err = controller.storeResponseInCache(cacheKey, response, ttl)
 			if err != nil {
 				controller.Logger.WithError(err).WithFields(logrus.Fields{
 					"cache-key": cacheKey,
@@ -506,26 +556,19 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 				panic(err)
 			}
 
-			response, _, err = controller.FindResponseInCache(cacheKey)
+			response, _, err = controller.findResponseInCache(cacheKey)
 			if err != nil {
 				panic(err)
 			}
 		}
 	}
 
-	//TODO add warnings https://tools.ietf.org/html/rfc7234#section-5.5
-
-	err = WriteHTTPResponse(resp, response)
-	if err != nil {
-		controller.Logger.WithError(err).Error("Error while writing response to http client")
-
-		panic(err)
-	}
+	return response
 }
 
-//StoreResponseInCache stores the given response in the cache under the cacheKey
-//The main difference with StoreInCache is that this function handels the generation of the byte representation of the response
-func (controller *CacheController) StoreResponseInCache(cacheKey string, response *http.Response, ttl time.Duration) error {
+//storeResponseInCache stores the given response in the cache under the cacheKey
+//The main difference with storeInCache is that this function handels the generation of the byte representation of the response
+func (controller *CacheController) storeResponseInCache(cacheKey string, response *http.Response, ttl time.Duration) error {
 
 	pipeReader, pipeWriter := io.Pipe()
 
@@ -539,7 +582,7 @@ func (controller *CacheController) StoreResponseInCache(cacheKey string, respons
 		writeErrChan <- err
 	}()
 
-	storeErr := controller.StoreInCache(cacheKey, pipeReader, ttl)
+	storeErr := controller.storeInCache(cacheKey, pipeReader, ttl)
 	writeErr := <-writeErrChan
 
 	if storeErr != nil {
@@ -553,8 +596,8 @@ func (controller *CacheController) StoreResponseInCache(cacheKey string, respons
 	return nil
 }
 
-//StoreSecondaryKeysInCache creates a special purpose cache entry which stores a list of header names used as secondary cache keys
-func (controller *CacheController) StoreSecondaryKeysInCache(primaryCacheKey string, keys []string, ttl time.Duration) error {
+//storeSecondaryKeysInCache creates a special purpose cache entry which stores a list of header names used as secondary cache keys
+func (controller *CacheController) storeSecondaryKeysInCache(primaryCacheKey string, keys []string, ttl time.Duration) error {
 
 	secondaryCacheKeys := "secondary-keys" + primaryCacheKey
 
@@ -564,228 +607,11 @@ func (controller *CacheController) StoreSecondaryKeysInCache(primaryCacheKey str
 
 	keysReader := ioutil.NopCloser(strings.NewReader(keysString))
 
-	return controller.StoreInCache(secondaryCacheKeys, keysReader, ttl)
+	return controller.storeInCache(secondaryCacheKeys, keysReader, ttl)
 }
 
-//MayServeStaleResponse checks if according to the config and rules specified in RFC7234 the caching server is allowed to serve the response if it is stale
-func MayServeStaleResponse(cacheConfig *CacheConfig, response *http.Response) bool {
-
-	//If serving of stale responses is turned off
-	if !cacheConfig.ServeStaleOnError {
-		return false
-	}
-
-	if MayServeStaleResponseByExtension(cacheConfig, response) {
-		return true
-	}
-
-	directives := SplitCacheControlHeader(response.Header[CacheControlHeader])
-	for _, directive := range directives {
-
-		//If response contains a cache directive that disallowes stale responses section 4.2.4 of RFC7234
-		if directive == MustRevalidateDirective || directive == ProxyRevalidateDirective ||
-			directive == NoCacheDirective || strings.HasPrefix(directive, SMaxAgeDirective) {
-
-			return false
-		}
-	}
-
-	return true
-}
-
-//MayServeStaleResponseByExtension checks if there are any Cache-Control extensions which allow stale responses to be served
-func MayServeStaleResponseByExtension(cacheConfig *CacheConfig, response *http.Response) bool {
-
-	//TODO implement https://tools.ietf.org/html/rfc5861
-
-	return false
-}
-
-// From net/http/httputil/reverseproxy.go
-// removeConnectionHeaders removes hop-by-hop headers listed in the "Connection" header of h.
-// See RFC 7230, section 6.1
-func removeConnectionHeaders(h http.Header) {
-	for _, f := range h["Connection"] {
-		for _, sf := range strings.Split(f, ",") {
-			if sf = strings.TrimSpace(sf); sf != "" {
-				h.Del(sf)
-			}
-		}
-	}
-}
-
-// From net/http/httputil/reverseproxy.go
-// Hop-by-hop headers. These are removed when sent to the backend.
-// As of RFC 7230, hop-by-hop headers are required to appear in the
-// Connection header field. These are the headers defined by the
-// obsoleted RFC 2616 (section 13.5.1) and are used for backward
-// compatibility.
-var hopHeaders = []string{
-	"Connection",
-	"Proxy-Connection", // non-standard but still sent by libcurl and rejected by e.g. google
-	"Keep-Alive",
-	"Proxy-Authenticate",
-	"Proxy-Authorization",
-	"Te",      // canonicalized version of "TE"
-	"Trailer", // not Trailers per URL above; https://www.rfc-editor.org/errata_search.php?eid=4522
-	"Transfer-Encoding",
-	"Upgrade",
-}
-
-//ProxyToOrigin proxies a request to a origin server using the given config and return the response
-func ProxyToOrigin(forwardContext context.Context, transport http.RoundTripper, forwardConfig *ForwardConfig, req *http.Request) (*http.Response, error) {
-	//TODO add websocket support
-
-	//Clone the request
-	outreq := req.Clone(forwardContext)
-	if req.ContentLength == 0 {
-		outreq.Body = nil // Issue 16036: nil Body for http.Transport retries
-	}
-	if outreq.Header == nil {
-		outreq.Header = make(http.Header) // Issue 33142: historical behavior was to always allocate
-	}
-
-	outreq.Close = false
-
-	// TODO uncomment when adding websocket support
-	// reqUpType := ""
-	// if httpguts.HeaderValuesContainsToken(outreq.Header["Connection"], "Upgrade") {
-	// 	reqUpType = strings.ToLower(outreq.Header.Get("Upgrade"))
-	// }
-
-	removeConnectionHeaders(outreq.Header)
-
-	// Remove hop-by-hop headers to the backend. Especially
-	// important is "Connection" because we want a persistent
-	// connection, regardless of what the client sent to us.
-	for _, h := range hopHeaders {
-		hv := outreq.Header.Get(h)
-		if hv == "" {
-			continue
-		}
-		if h == "Te" && hv == "trailers" {
-			// Issue 21096: tell backend applications that
-			// care about trailer support that we support
-			// trailers. (We do, but we don't go out of
-			// our way to advertise that unless the
-			// incoming client request thought it was
-			// worth mentioning)
-			continue
-		}
-		outreq.Header.Del(h)
-	}
-
-	// TODO uncomment when adding websocket support
-	// // After stripping all the hop-by-hop connection headers above, add back any
-	// // necessary for protocol upgrades, such as for websockets.
-	// if reqUpType != "" {
-	// 	outreq.Header.Set("Connection", "Upgrade")
-	// 	outreq.Header.Set("Upgrade", reqUpType)
-	// }
-
-	if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
-		// If we aren't the first proxy retain prior
-		// X-Forwarded-For information as a comma+space
-		// separated list and fold multiple headers into one.
-		if prior, ok := outreq.Header["X-Forwarded-For"]; ok {
-			clientIP = strings.Join(prior, ", ") + ", " + clientIP
-		}
-		outreq.Header.Set("X-Forwarded-For", clientIP)
-	}
-
-	//Change the protocol of the url to the protocol specified in the forward config
-	if forwardConfig.TLS {
-		outreq.URL.Scheme = "https"
-	} else {
-		outreq.URL.Scheme = "http"
-	}
-
-	//Forward the original hostname for which the request was intended
-	outreq.URL.Host = req.Host
-	outreq.Host = req.Host
-
-	//Forward request to origin server
-	response, err := transport.RoundTrip(outreq)
-	if err != nil {
-		return nil, err
-	}
-
-	removeConnectionHeaders(response.Header)
-
-	for _, h := range hopHeaders {
-		response.Header.Del(h)
-	}
-
-	return response, nil
-}
-
-//WriteHTTPResponse writes a response the response writer
-func WriteHTTPResponse(rw http.ResponseWriter, response *http.Response) error {
-
-	//TODO add support for Trailers https://golang.org/src/net/http/httputil/reverseproxy.go?s=3318:3379#L276
-
-	//Set all response headers in the response writer
-	for key, values := range response.Header {
-		rw.Header()[key] = values
-	}
-
-	rw.WriteHeader(response.StatusCode)
-
-	//Close the body before returning
-	defer response.Body.Close()
-	_, err := io.Copy(rw, response.Body)
-
-	return err
-}
-
-func getResponseAge(response *http.Response) int64 {
-
-	apparentAge := int64(0)
-
-	dateString := response.Header.Get(DateHeader)
-	if dateString != "" {
-		date, err := http.ParseTime(dateString)
-		if err == nil {
-
-			//Get the second difference between date and now
-			// this is the apparent_age method described in section 4.2.3 of RFC 7234
-			apparentAge = int64(time.Since(date).Seconds())
-			if apparentAge < 0 {
-				apparentAge = 0
-			}
-
-		}
-	}
-
-	if ageHeader := response.Header.Get(AgeHeader); ageHeader != "" {
-		ageValue, err := strconv.ParseInt(ageHeader, 10, 0)
-		if err == nil {
-
-			//TODO correct age by adding response_delay
-
-			return ageValue + apparentAge
-		}
-	}
-
-	return apparentAge
-}
-
-//WriteCachedResponse writes a cached response to a response writer
-// this function should be used to write cached responses because it modifies the response to comply with the RFC's
-func WriteCachedResponse(rw http.ResponseWriter, cachedResponse *http.Response, ttl time.Duration) error {
-
-	age := getResponseAge(cachedResponse)
-
-	//If the age is positive we add the header. Negative ages are not allowed
-	if age >= 0 {
-		cachedResponse.Header.Set(AgeHeader, strconv.FormatInt(age, 10))
-	}
-
-	return WriteHTTPResponse(rw, cachedResponse)
-}
-
-//RefreshCacheEntry updates the ttl of the given cacheKey
-func (controller *CacheController) RefreshCacheEntry(cacheKey string, ttl time.Duration) error {
+//refreshCacheEntry updates the ttl of the given cacheKey
+func (controller *CacheController) refreshCacheEntry(cacheKey string, ttl time.Duration) error {
 
 	for _, cacheLayer := range controller.Layers {
 		err := cacheLayer.Refresh(cacheKey, ttl)
@@ -799,8 +625,8 @@ func (controller *CacheController) RefreshCacheEntry(cacheKey string, ttl time.D
 	return nil
 }
 
-//StoreInCache attempts to store the entity in the cache
-func (controller *CacheController) StoreInCache(cacheKey string, entry io.ReadCloser, ttl time.Duration) error {
+//storeInCache attempts to store the entity in the cache
+func (controller *CacheController) storeInCache(cacheKey string, entry io.ReadCloser, ttl time.Duration) error {
 
 	//Make sure the entry is always closed so we don't leak resources
 	defer entry.Close()
@@ -831,9 +657,9 @@ func (controller *CacheController) StoreInCache(cacheKey string, entry io.ReadCl
 	return nil
 }
 
-//FindResponseInCache attempts to find a cached response in the caching layers
+//findResponseInCache attempts to find a cached response in the caching layers
 // it returns the cached response and the TTL. A negative TTL means the response is stale
-func (controller *CacheController) FindResponseInCache(cacheKey string) (*http.Response, time.Duration, error) {
+func (controller *CacheController) findResponseInCache(cacheKey string) (*http.Response, time.Duration, error) {
 
 	//TODO if a entry is found in a lower layer consider moving it to a higher layer if it is requested more frequently
 
@@ -865,12 +691,12 @@ func (controller *CacheController) FindResponseInCache(cacheKey string) (*http.R
 	return nil, -1, nil
 }
 
-//FindSecondaryKeysInCache attempts to find the secondary keys defined for a set of responses with the given primary cache key
+//findSecondaryKeysInCache attempts to find the secondary keys defined for a set of responses with the given primary cache key
 //It does this by prepending "secondary-keys" to the cache key and splitting the result on newlines
 //
 //If no secondary keys exist or can't be found in the cache a slice of zero length will be returned
 //The ttl will be -1 of no entry was found
-func (controller *CacheController) FindSecondaryKeysInCache(cacheKey string) ([]string, time.Duration, error) {
+func (controller *CacheController) findSecondaryKeysInCache(cacheKey string) ([]string, time.Duration, error) {
 
 	//TODO if a entry is found in a lower layer consider moving it to a higher layer if it is requested more frequently
 
@@ -904,91 +730,4 @@ func (controller *CacheController) FindSecondaryKeysInCache(cacheKey string) ([]
 
 	//If entry wasn't found in any layer
 	return []string{}, -1, nil
-}
-
-//GetPrimaryCacheKey generates the primary cache key for the request according to the requirement in section 4 of RFC7234
-//The primary keys is the method, host and effective URI concatenated together
-func GetPrimaryCacheKey(cacheConfig *CacheConfig, forwardConfig *ForwardConfig, req *http.Request) string {
-
-	//TODO custom cache keys
-
-	buf := &bytes.Buffer{}
-
-	buf.WriteString(req.Method)
-	buf.WriteString(GetEffectiveURI(req, forwardConfig))
-
-	return buf.String()
-}
-
-//GetSecondaryCacheKey generates the secondary cache key based on the secondary key fields specified in the cached responses and the current request
-func GetSecondaryCacheKey(secondaryKeyFields []string, req *http.Request) string {
-
-	//Sort the fields so the order in the resulting key is always the same
-	sort.Strings(secondaryKeyFields)
-
-	buf := &bytes.Buffer{}
-
-	for _, key := range secondaryKeyFields {
-		//Separate pieces of the key by the pipe. It is not a allowed value in the Method, hostname, URI or header names so it is a good separator
-		buf.WriteRune('|')
-
-		//Write the key as part of the cache key
-		buf.WriteString(key)
-
-		//Separate field name from value
-		buf.WriteRune(':')
-
-		values := req.Header[textproto.CanonicalMIMEHeaderKey(key)]
-		sort.Strings(values)
-
-		for _, value := range values {
-
-			//TODO normalize value based on per header syntax as per Section 4.1 of RFC7234
-
-			buf.WriteString(value)
-		}
-	}
-
-	return buf.String()
-}
-
-//GetEffectiveURI returns the effective URI as string generated from a request object
-// https://tools.ietf.org/html/rfc7230#section-5.5
-func GetEffectiveURI(req *http.Request, forwardConfig *ForwardConfig) string {
-
-	//If the request URI is in the absolute-form, just return it
-	if req.URL.Host != "" && req.URL.Scheme != "" {
-		return req.URL.String()
-	}
-
-	//Otherwise build the absolute URI ourselfs
-	effectiveURI := &url.URL{}
-
-	if req.TLS == nil {
-		effectiveURI.Scheme = "http"
-	} else {
-		effectiveURI.Scheme = "https"
-	}
-
-	//If the host header is set in the request or in the URI this will be true
-	if req.Host != "" {
-		effectiveURI.Host = req.Host
-	} else {
-		effectiveURI.Host = forwardConfig.Host
-	}
-
-	//If request is in asterisk form we leave the path and query empty
-	if req.URL.Path != "*" {
-		effectiveURI.Path = req.URL.Path
-		effectiveURI.RawPath = req.URL.RawPath
-
-		//Parse and re-encode the query, this causes the query to be sorted by key
-		// sort order is important when the effective uri is used in a cache key
-		queryValues, err := url.ParseQuery(req.URL.RawQuery)
-		if err == nil {
-			effectiveURI.RawQuery = queryValues.Encode()
-		}
-	}
-
-	return effectiveURI.String()
 }

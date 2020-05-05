@@ -13,7 +13,7 @@ intergrationtest: ## Executes the intergration tests. The intergration test star
 	# Build the standalone executable as test with coverage export enabled
 	go test -tags httpcachetest -covermode count -coverpkg github.com/dylandreimerink/sharedhttpcache,github.com/dylandreimerink/sharedhttpcache/layer -c -o test_output/httpcachetest github.com/dylandreimerink/sharedhttpcache/cmd/sharedhttpcache
 	# Start the cache-tests origin server
-	npm run server --prefix test_output/cache-tests & CACHE_ORIGIN_PID=$$!; \
+	npm run server --prefix test_output/cache-tests & CACHE_ORIGIN_PID=$$!; sleep 5; \
 	./test_output/httpcachetest -test.coverprofile test_output/http_cache_test_coverage.out __DEVEL--i-heard-you-like-tests --config cmd/sharedhttpcache/cache_test_config.yaml & CACHE_SERVER_PID=$$!; \
 	npm run --prefix test_output/cache-tests --silent cli --base=http://localhost:8081 > test_output/cache-tests/results/sharedhttpcache.json || kill $$CACHE_SERVER_PID || true && kill $$CACHE_ORIGIN_PID || true; \
 	kill "$$CACHE_SERVER_PID" || true; \
