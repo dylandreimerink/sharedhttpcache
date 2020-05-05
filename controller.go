@@ -115,7 +115,7 @@ func (controller *CacheController) ServeHTTP(resp http.ResponseWriter, req *http
 	// If response has not been set from the cache or by the revalidation process
 	// Proxy the request to the origin server
 	if response == nil {
-		response, stop = controller.proxyRequestToOrigin(cacheConfig, forwardConfig, transport, resp, req, response)
+		response, stop = controller.proxyRequestToOrigin(cacheConfig, forwardConfig, transport, resp, req)
 		if stop {
 			return
 		}
@@ -144,7 +144,6 @@ func (controller *CacheController) proxyRequestToOrigin(
 	transport http.RoundTripper,
 	resp http.ResponseWriter,
 	req *http.Request,
-	response *http.Response,
 ) (
 	*http.Response,
 	bool,
@@ -156,8 +155,7 @@ func (controller *CacheController) proxyRequestToOrigin(
 		defer cancel()
 	}
 
-	var err error
-	response, err = proxyToOrigin(ctx, transport, forwardConfig, req)
+	response, err := proxyToOrigin(ctx, transport, forwardConfig, req)
 	if err != nil {
 
 		//Log as a warning since errors here are exprected when a origin server is down

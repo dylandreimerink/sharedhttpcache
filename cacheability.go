@@ -296,12 +296,12 @@ func isMethodCacheable(config *CacheConfig, method string) bool {
 	return false
 }
 
-//isResponseCacheableByExtension checks if a response is cacheable based on supported Cache-Control extensions
-// https://tools.ietf.org/html/rfc7234#section-5.2.3
-func isResponseCacheableByExtension(config *CacheConfig, resp *http.Response) bool {
-	//TODO find and implement cache extension
-	return false
-}
+// //isResponseCacheableByExtension checks if a response is cacheable based on supported Cache-Control extensions
+// // https://tools.ietf.org/html/rfc7234#section-5.2.3
+// func isResponseCacheableByExtension(config *CacheConfig, resp *http.Response) bool {
+// 	//TODO find and implement cache extension
+// 	return false
+// }
 
 //mayServeStaleResponse checks if according to the config and rules specified in RFC7234 the caching server is allowed to serve the response if it is stale
 func mayServeStaleResponse(cacheConfig *CacheConfig, response *http.Response) bool {
